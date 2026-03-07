@@ -24,6 +24,36 @@ export const providerQueryKeys = {
     ] as const,
 };
 
+export interface CheckpointDiffInvalidationInput {
+  threadId: ThreadId;
+  checkpointTurnCount: number;
+}
+
+export function shouldInvalidateCheckpointDiffQuery(
+  queryKey: ReadonlyArray<unknown>,
+  input: CheckpointDiffInvalidationInput,
+): boolean {
+  if (
+    queryKey[0] !== "providers" ||
+    queryKey[1] !== "checkpointDiff" ||
+    queryKey.length < 5 ||
+    queryKey[2] !== input.threadId
+  ) {
+    return false;
+  }
+
+  const fromTurnCount = queryKey[3];
+  const toTurnCount = queryKey[4];
+  if (typeof fromTurnCount !== "number" || typeof toTurnCount !== "number") {
+    return false;
+  }
+
+  return (
+    fromTurnCount === Math.max(0, input.checkpointTurnCount - 1) &&
+    toTurnCount === input.checkpointTurnCount
+  );
+}
+
 function decodeCheckpointDiffRequest(input: CheckpointDiffQueryInput) {
   if (input.fromTurnCount === 0) {
     return Schema.decodeUnknownOption(OrchestrationGetFullThreadDiffInput)({

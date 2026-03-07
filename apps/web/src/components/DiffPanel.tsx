@@ -4,7 +4,15 @@ import { useQuery } from "@tanstack/react-query";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@t3tools/contracts";
 import { ChevronLeftIcon, ChevronRightIcon, Columns2Icon, Rows3Icon } from "lucide-react";
-import { type WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  type WheelEvent as ReactWheelEvent,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import { gitBranchesQueryOptions } from "~/lib/gitReactQuery";
 import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
 import { gitDiffQueryOptions } from "~/lib/gitReactQuery";
@@ -15,6 +23,15 @@ import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch"
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { buildPatchCacheKey } from "../lib/diffRendering";
+import {
+  buildStableDiffFileKey,
+  captureVisibleDiffAnchor,
+  resolveStableDiffFilePaths,
+  restoreDiffAnchor,
+  scrollTrackedDiffFileIntoView,
+  shouldQueueSelectedFileScroll,
+  type DiffViewportAnchor,
+} from "../lib/diffPanelAnchoring";
 import { resolveDiffThemeName } from "../lib/diffRendering";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
 import { useStore } from "../store";
@@ -131,15 +148,7 @@ function getRenderablePatch(
 }
 
 function resolveFileDiffPath(fileDiff: FileDiffMetadata): string {
-  const raw = fileDiff.name ?? fileDiff.prevName ?? "";
-  if (raw.startsWith("a/") || raw.startsWith("b/")) {
-    return raw.slice(2);
-  }
-  return raw;
-}
-
-function buildFileDiffRenderKey(fileDiff: FileDiffMetadata): string {
-  return fileDiff.cacheKey ?? `${fileDiff.prevName ?? "none"}:${fileDiff.name}`;
+  return resolveStableDiffFilePaths(fileDiff).filePath;
 }
 
 function formatTurnChipTimestamp(isoDate: string): string {
@@ -180,6 +189,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const [diffRenderMode, setDiffRenderMode] = useState<DiffRenderMode>("stacked");
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const turnStripRef = useRef<HTMLDivElement>(null);
+  const diffAnchorRef = useRef<DiffViewportAnchor | null>(null);
+  const previousPatchKeyRef = useRef<string | null>(null);
+  const previousSelectedFilePathRef = useRef<string | null>(null);
+  const pendingSelectedFileScrollRef = useRef<string | null>(null);
   const [canScrollTurnStripLeft, setCanScrollTurnStripLeft] = useState(false);
   const [canScrollTurnStripRight, setCanScrollTurnStripRight] = useState(false);
   const routeThreadId = useParams({
@@ -255,9 +268,17 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     : repoDiffQuery.isLoading;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
+  const patchCacheScope = `diff-panel:${resolvedTheme}`;
+  const patchCacheKey = useMemo(() => {
+    if (!selectedPatch) {
+      return null;
+    }
+    const normalizedPatch = selectedPatch.trim();
+    return normalizedPatch.length > 0 ? buildPatchCacheKey(normalizedPatch, patchCacheScope) : null;
+  }, [patchCacheScope, selectedPatch]);
   const renderablePatch = useMemo(
-    () => getRenderablePatch(selectedPatch, `diff-panel:${resolvedTheme}`),
-    [resolvedTheme, selectedPatch],
+    () => getRenderablePatch(selectedPatch, patchCacheScope),
+    [patchCacheScope, selectedPatch],
   );
   const renderableFiles = useMemo(() => {
     if (!renderablePatch || renderablePatch.kind !== "files") {
@@ -271,15 +292,94 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
     );
   }, [renderablePatch]);
 
+  const getDiffScrollContainer = useCallback(() => {
+    return (
+      patchViewportRef.current?.querySelector<HTMLElement>("[data-diff-scroll-container='true']") ??
+      null
+    );
+  }, []);
+
   useEffect(() => {
-    if (!selectedFilePath || !patchViewportRef.current) {
+    if (shouldQueueSelectedFileScroll(previousSelectedFilePathRef.current, selectedFilePath)) {
+      pendingSelectedFileScrollRef.current = selectedFilePath;
+    }
+    previousSelectedFilePathRef.current = selectedFilePath;
+    if (selectedFilePath === null) {
+      pendingSelectedFileScrollRef.current = null;
+    }
+  }, [selectedFilePath]);
+
+  useLayoutEffect(() => {
+    const container = getDiffScrollContainer();
+    if (!container || !patchCacheKey || renderablePatch?.kind !== "files") {
+      previousPatchKeyRef.current = patchCacheKey;
       return;
     }
-    const target = Array.from(
-      patchViewportRef.current.querySelectorAll<HTMLElement>("[data-diff-file-path]"),
-    ).find((element) => element.dataset.diffFilePath === selectedFilePath);
-    target?.scrollIntoView({ block: "nearest" });
-  }, [selectedFilePath, renderableFiles]);
+
+    const previousPatchKey = previousPatchKeyRef.current;
+    const pendingSelectedFileScroll = pendingSelectedFileScrollRef.current;
+    if (
+      previousPatchKey &&
+      previousPatchKey !== patchCacheKey &&
+      pendingSelectedFileScroll === null &&
+      diffAnchorRef.current?.capturedAtPatchKey === previousPatchKey
+    ) {
+      const restoredAnchor = restoreDiffAnchor(container, diffAnchorRef.current);
+      if (restoredAnchor) {
+        diffAnchorRef.current = restoredAnchor;
+      }
+    }
+
+    const nextAnchor = captureVisibleDiffAnchor(container, patchCacheKey);
+    if (nextAnchor) {
+      diffAnchorRef.current = nextAnchor;
+    }
+    previousPatchKeyRef.current = patchCacheKey;
+  }, [getDiffScrollContainer, patchCacheKey, renderablePatch?.kind, renderableFiles]);
+
+  useLayoutEffect(() => {
+    const pendingSelectedFileScroll = pendingSelectedFileScrollRef.current;
+    if (!pendingSelectedFileScroll) {
+      return;
+    }
+    const container = getDiffScrollContainer();
+    if (!container) {
+      return;
+    }
+    const resolvedPath = scrollTrackedDiffFileIntoView(container, pendingSelectedFileScroll);
+    if (!resolvedPath) {
+      return;
+    }
+    pendingSelectedFileScrollRef.current = null;
+    if (!patchCacheKey) {
+      return;
+    }
+    const anchor = captureVisibleDiffAnchor(container, patchCacheKey);
+    if (anchor) {
+      diffAnchorRef.current = anchor;
+    }
+  }, [getDiffScrollContainer, patchCacheKey, renderableFiles, selectedFilePath]);
+
+  useEffect(() => {
+    const container = getDiffScrollContainer();
+    if (!container || !patchCacheKey || renderablePatch?.kind !== "files") {
+      return;
+    }
+
+    const captureAnchor = () => {
+      const anchor = captureVisibleDiffAnchor(container, patchCacheKey);
+      if (anchor) {
+        diffAnchorRef.current = anchor;
+      }
+    };
+
+    captureAnchor();
+    container.addEventListener("scroll", captureAnchor, { passive: true });
+
+    return () => {
+      container.removeEventListener("scroll", captureAnchor);
+    };
+  }, [getDiffScrollContainer, patchCacheKey, renderablePatch?.kind]);
 
   const openDiffFileInEditor = useCallback(
     (filePath: string) => {
@@ -550,19 +650,21 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
             ) : renderablePatch.kind === "files" ? (
               <Virtualizer
                 className="diff-render-surface h-full min-h-0 overflow-auto px-2 pb-2"
+                data-diff-scroll-container="true"
                 config={{
                   overscrollSize: 600,
                   intersectionObserverMargin: 1200,
                 }}
               >
                 {renderableFiles.map((fileDiff) => {
-                  const filePath = resolveFileDiffPath(fileDiff);
-                  const fileKey = buildFileDiffRenderKey(fileDiff);
+                  const { filePath, prevFilePath } = resolveStableDiffFilePaths(fileDiff);
+                  const fileKey = buildStableDiffFileKey(fileDiff);
                   const themedFileKey = `${fileKey}:${resolvedTheme}`;
                   return (
                     <div
                       key={themedFileKey}
                       data-diff-file-path={filePath}
+                      {...(prevFilePath ? { "data-diff-prev-file-path": prevFilePath } : {})}
                       className="diff-render-file mb-2 rounded-md first:mt-2 last:mb-0"
                       onClickCapture={(event) => {
                         const nativeEvent = event.nativeEvent as MouseEvent;

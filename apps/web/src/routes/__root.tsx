@@ -21,7 +21,10 @@ import { useTerminalStateStore } from "../terminalStateStore";
 import { preferredTerminalEditor } from "../terminal-links";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
-import { providerQueryKeys } from "../lib/providerReactQuery";
+import {
+  providerQueryKeys,
+  shouldInvalidateCheckpointDiffQuery,
+} from "../lib/providerReactQuery";
 import { gitQueryKeys } from "../lib/gitReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 
@@ -213,7 +216,17 @@ function EventRouter() {
         return;
       }
       latestSequence = event.sequence;
-      if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
+      if (event.type === "thread.turn-diff-completed") {
+        void queryClient.invalidateQueries({
+          predicate: (query) =>
+            shouldInvalidateCheckpointDiffQuery(query.queryKey, {
+              threadId: event.payload.threadId,
+              checkpointTurnCount: event.payload.checkpointTurnCount,
+            }),
+        });
+        needsGitInvalidation = true;
+      }
+      if (event.type === "thread.reverted") {
         needsProviderInvalidation = true;
         needsGitInvalidation = true;
       }

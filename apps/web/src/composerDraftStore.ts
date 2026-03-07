@@ -15,6 +15,7 @@ import {
   type ChatImageAttachment,
 } from "./types";
 import { Debouncer } from "@tanstack/react-pacer";
+import { getLocalStorage } from "./lib/browserStorage";
 import { create } from "zustand";
 import { createJSONStorage, persist, type StateStorage } from "zustand/middleware";
 
@@ -50,10 +51,7 @@ export function createDebouncedStorage(baseStorage: StateStorage): DebouncedStor
   };
 }
 
-const composerDebouncedStorage: DebouncedStorage =
-  typeof localStorage !== "undefined"
-    ? createDebouncedStorage(localStorage)
-    : { getItem: () => null, setItem: () => {}, removeItem: () => {}, flush: () => {} };
+const composerDebouncedStorage: DebouncedStorage = createDebouncedStorage(getLocalStorage());
 
 // Flush pending composer draft writes before page unload to prevent data loss.
 if (typeof window !== "undefined") {

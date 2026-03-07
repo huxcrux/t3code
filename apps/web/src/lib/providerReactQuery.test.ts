@@ -1,7 +1,11 @@
 import { ThreadId, type NativeApi } from "@t3tools/contracts";
 import { QueryClient } from "@tanstack/react-query";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { checkpointDiffQueryOptions, providerQueryKeys } from "./providerReactQuery";
+import {
+  checkpointDiffQueryOptions,
+  providerQueryKeys,
+  shouldInvalidateCheckpointDiffQuery,
+} from "./providerReactQuery";
 import * as nativeApi from "../nativeApi";
 
 const threadId = ThreadId.makeUnsafe("thread-id");
@@ -41,6 +45,68 @@ describe("providerQueryKeys.checkpointDiff", () => {
         cacheScope: "turn:new-turn",
       }),
     );
+  });
+
+  it("matches only the exact newly completed checkpoint range for targeted invalidation", () => {
+    expect(
+      shouldInvalidateCheckpointDiffQuery(
+        providerQueryKeys.checkpointDiff({
+          threadId,
+          fromTurnCount: 2,
+          toTurnCount: 3,
+          cacheScope: "turn:3",
+        }),
+        {
+          threadId,
+          checkpointTurnCount: 3,
+        },
+      ),
+    ).toBe(true);
+    expect(
+      shouldInvalidateCheckpointDiffQuery(
+        providerQueryKeys.checkpointDiff({
+          threadId,
+          fromTurnCount: 1,
+          toTurnCount: 2,
+          cacheScope: "turn:2",
+        }),
+        {
+          threadId,
+          checkpointTurnCount: 3,
+        },
+      ),
+    ).toBe(false);
+    expect(
+      shouldInvalidateCheckpointDiffQuery(
+        providerQueryKeys.checkpointDiff({
+          threadId: ThreadId.makeUnsafe("other-thread"),
+          fromTurnCount: 2,
+          toTurnCount: 3,
+          cacheScope: "turn:3",
+        }),
+        {
+          threadId,
+          checkpointTurnCount: 3,
+        },
+      ),
+    ).toBe(false);
+  });
+
+  it("matches the first completed turn range when the range starts at zero", () => {
+    expect(
+      shouldInvalidateCheckpointDiffQuery(
+        providerQueryKeys.checkpointDiff({
+          threadId,
+          fromTurnCount: 0,
+          toTurnCount: 1,
+          cacheScope: "turn:1",
+        }),
+        {
+          threadId,
+          checkpointTurnCount: 1,
+        },
+      ),
+    ).toBe(true);
   });
 });
 
