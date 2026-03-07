@@ -9,14 +9,13 @@
  *
  * @module CheckpointStoreLive
  */
-import { randomUUID } from "node:crypto";
-
 import { Effect, Layer, FileSystem, Path } from "effect";
 
 import { CheckpointInvariantError } from "../Errors.ts";
 import { GitCommandError } from "../../git/Errors.ts";
 import { GitServiceLive } from "../../git/Layers/GitService.ts";
 import { GitService } from "../../git/Services/GitService.ts";
+import { withTemporarySnapshotTree } from "../../git/TemporaryIndexSnapshot.ts";
 import { CheckpointStore, type CheckpointStoreShape } from "../Services/CheckpointStore.ts";
 import { CheckpointRef } from "@t3tools/contracts";
 
@@ -44,14 +43,7 @@ const makeCheckpointStore = Effect.gen(function* () {
       );
 
   const hasHeadCommit = (cwd: string): Effect.Effect<boolean, GitCommandError> =>
-    git
-      .execute({
-        operation: "CheckpointStore.hasHeadCommit",
-        cwd,
-        args: ["rev-parse", "--verify", "HEAD"],
-        allowNonZeroExit: true,
-      })
-      .pipe(Effect.map((result) => result.code === 0));
+    resolveHeadCommit(cwd).pipe(Effect.map((commit) => commit !== null));
 
   const resolveCheckpointCommit = (
     cwd: string,
@@ -90,54 +82,26 @@ const makeCheckpointStore = Effect.gen(function* () {
   const captureCheckpoint: CheckpointStoreShape["captureCheckpoint"] = (input) =>
     Effect.gen(function* () {
       const operation = "CheckpointStore.captureCheckpoint";
+      const headCommitOid = yield* resolveHeadCommit(input.cwd);
 
-      yield* Effect.acquireUseRelease(
-        fs.makeTempDirectory({ prefix: "t3-fs-checkpoint-" }),
-        (tempDir) =>
+      yield* withTemporarySnapshotTree(
+        {
+          operation,
+          cwd: input.cwd,
+          gitExecute: git.execute,
+          fileSystem: fs,
+          path,
+          baseCommitOid: headCommitOid,
+        },
+        (treeOid) =>
           Effect.gen(function* () {
-            const tempIndexPath = path.join(tempDir, `index-${randomUUID()}`);
             const commitEnv: NodeJS.ProcessEnv = {
               ...process.env,
-              GIT_INDEX_FILE: tempIndexPath,
               GIT_AUTHOR_NAME: "T3 Code",
               GIT_AUTHOR_EMAIL: "t3code@users.noreply.github.com",
               GIT_COMMITTER_NAME: "T3 Code",
               GIT_COMMITTER_EMAIL: "t3code@users.noreply.github.com",
             };
-
-            const headExists = yield* hasHeadCommit(input.cwd);
-            if (headExists) {
-              yield* git.execute({
-                operation,
-                cwd: input.cwd,
-                args: ["read-tree", "HEAD"],
-                env: commitEnv,
-              });
-            }
-
-            yield* git.execute({
-              operation,
-              cwd: input.cwd,
-              args: ["add", "-A", "--", "."],
-              env: commitEnv,
-            });
-
-            const writeTreeResult = yield* git.execute({
-              operation,
-              cwd: input.cwd,
-              args: ["write-tree"],
-              env: commitEnv,
-            });
-            const treeOid = writeTreeResult.stdout.trim();
-            if (treeOid.length === 0) {
-              return yield* new GitCommandError({
-                operation,
-                command: "git write-tree",
-                cwd: input.cwd,
-                detail: "git write-tree returned an empty tree oid.",
-              });
-            }
-
             const message = `t3 checkpoint ref=${input.checkpointRef}`;
             const commitTreeResult = yield* git.execute({
               operation,
@@ -161,7 +125,6 @@ const makeCheckpointStore = Effect.gen(function* () {
               args: ["update-ref", input.checkpointRef, commitOid],
             });
           }),
-        (tempDir) => fs.remove(tempDir, { recursive: true }),
       ).pipe(
         Effect.catchTags({
           PlatformError: (error) =>

@@ -365,6 +365,18 @@ describe("wsNativeApi", () => {
     });
   });
 
+  it("forwards repo diff requests to the websocket git method", async () => {
+    requestMock.mockResolvedValue({ diff: "patch" });
+    const { createWsNativeApi } = await import("./wsNativeApi");
+
+    const api = createWsNativeApi();
+    await api.git.diff({ cwd: "/tmp/project" });
+
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.gitDiff, {
+      cwd: "/tmp/project",
+    });
+  });
+
   it("forwards context menu metadata to desktop bridge", async () => {
     const showContextMenu = vi.fn().mockResolvedValue("delete");
     Object.defineProperty(getWindowForTest(), "desktopBridge", {

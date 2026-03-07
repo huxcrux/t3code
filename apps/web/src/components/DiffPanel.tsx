@@ -7,6 +7,7 @@ import { ChevronLeftIcon, ChevronRightIcon, Columns2Icon, Rows3Icon } from "luci
 import { type WheelEvent as ReactWheelEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { gitBranchesQueryOptions } from "~/lib/gitReactQuery";
 import { checkpointDiffQueryOptions } from "~/lib/providerReactQuery";
+import { gitDiffQueryOptions } from "~/lib/gitReactQuery";
 import { cn } from "~/lib/utils";
 import { readNativeApi } from "../nativeApi";
 import { preferredTerminalEditor, resolvePathLinkTarget } from "../terminal-links";
@@ -148,6 +149,25 @@ function formatTurnChipTimestamp(isoDate: string): string {
   }).format(new Date(isoDate));
 }
 
+function resolveDiffErrorMessage(error: unknown, selectedTurn: boolean): string | null {
+  const message =
+    error instanceof Error ? error.message : typeof error === "string" ? error : null;
+  if (!message) {
+    return null;
+  }
+
+  const normalized = message.toLowerCase();
+  if (
+    selectedTurn &&
+    (normalized.includes("checkpoint ref is unavailable") ||
+      normalized.includes("filesystem checkpoint is unavailable"))
+  ) {
+    return "This turn diff is unavailable because its checkpoint snapshot is missing.";
+  }
+
+  return message;
+}
+
 interface DiffPanelProps {
   mode?: "inline" | "sheet" | "sidebar";
 }
@@ -215,62 +235,24 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
         : null,
     [selectedCheckpointTurnCount],
   );
-  const conversationCheckpointTurnCount = useMemo(() => {
-    const turnCounts = orderedTurnDiffSummaries
-      .map(
-        (summary) =>
-          summary.checkpointTurnCount ?? inferredCheckpointTurnCountByTurnId[summary.turnId],
-      )
-      .filter((value): value is number => typeof value === "number");
-    if (turnCounts.length === 0) {
-      return undefined;
-    }
-    const latest = Math.max(...turnCounts);
-    return latest > 0 ? latest : undefined;
-  }, [inferredCheckpointTurnCountByTurnId, orderedTurnDiffSummaries]);
-  const conversationCheckpointRange = useMemo(
-    () =>
-      !selectedTurn && typeof conversationCheckpointTurnCount === "number"
-        ? {
-            fromTurnCount: 0,
-            toTurnCount: conversationCheckpointTurnCount,
-          }
-        : null,
-    [conversationCheckpointTurnCount, selectedTurn],
-  );
-  const activeCheckpointRange = selectedTurn
-    ? selectedCheckpointRange
-    : conversationCheckpointRange;
-  const conversationCacheScope = useMemo(() => {
-    if (selectedTurn || orderedTurnDiffSummaries.length === 0) {
-      return null;
-    }
-    return `conversation:${orderedTurnDiffSummaries.map((summary) => summary.turnId).join(",")}`;
-  }, [orderedTurnDiffSummaries, selectedTurn]);
-  const activeCheckpointDiffQuery = useQuery(
+  const selectedTurnDiffQuery = useQuery(
     checkpointDiffQueryOptions({
-      threadId: activeThreadId,
-      fromTurnCount: activeCheckpointRange?.fromTurnCount ?? null,
-      toTurnCount: activeCheckpointRange?.toTurnCount ?? null,
-      cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : conversationCacheScope,
+      threadId: selectedTurn ? activeThreadId : null,
+      fromTurnCount: selectedTurn ? (selectedCheckpointRange?.fromTurnCount ?? null) : null,
+      toTurnCount: selectedTurn ? (selectedCheckpointRange?.toTurnCount ?? null) : null,
+      cacheScope: selectedTurn ? `turn:${selectedTurn.turnId}` : null,
       enabled: isGitRepo,
     }),
   );
-  const selectedTurnCheckpointDiff = selectedTurn
-    ? activeCheckpointDiffQuery.data?.diff
-    : undefined;
-  const conversationCheckpointDiff = selectedTurn
-    ? undefined
-    : activeCheckpointDiffQuery.data?.diff;
-  const isLoadingCheckpointDiff = activeCheckpointDiffQuery.isLoading;
-  const checkpointDiffError =
-    activeCheckpointDiffQuery.error instanceof Error
-      ? activeCheckpointDiffQuery.error.message
-      : activeCheckpointDiffQuery.error
-        ? "Failed to load checkpoint diff."
-        : null;
-
-  const selectedPatch = selectedTurn ? selectedTurnCheckpointDiff : conversationCheckpointDiff;
+  const repoDiffQuery = useQuery(gitDiffQueryOptions(selectedTurn ? null : (activeCwd ?? null)));
+  const selectedPatch = selectedTurn
+    ? selectedTurnDiffQuery.data?.diff
+    : repoDiffQuery.data?.diff;
+  const activeDiffError = selectedTurn ? selectedTurnDiffQuery.error : repoDiffQuery.error;
+  const diffErrorMessage = resolveDiffErrorMessage(activeDiffError, selectedTurn !== undefined);
+  const isInitialDiffLoad = selectedTurn
+    ? selectedTurnDiffQuery.isLoading
+    : repoDiffQuery.isLoading;
   const hasResolvedPatch = typeof selectedPatch === "string";
   const hasNoNetChanges = hasResolvedPatch && selectedPatch.trim().length === 0;
   const renderablePatch = useMemo(
@@ -451,7 +433,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                   : "border-border/70 bg-background/70 text-muted-foreground/80 hover:border-border hover:text-foreground/80",
               )}
             >
-              <div className="text-[10px] leading-tight font-medium">All turns</div>
+              <div className="text-[10px] leading-tight font-medium">Repo diff</div>
             </div>
           </button>
           {orderedTurnDiffSummaries.map((summary) => (
@@ -548,16 +530,18 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
             ref={patchViewportRef}
             className="diff-panel-viewport min-h-0 min-w-0 flex-1 overflow-hidden"
           >
-            {checkpointDiffError && !renderablePatch && (
+            {diffErrorMessage && !renderablePatch && (
               <div className="px-3">
-                <p className="mb-2 text-[11px] text-red-500/80">{checkpointDiffError}</p>
+                <p className="mb-2 text-[11px] text-red-500/80">{diffErrorMessage}</p>
               </div>
             )}
             {!renderablePatch ? (
               <div className="flex h-full items-center justify-center px-3 py-2 text-xs text-muted-foreground/70">
                 <p>
-                  {isLoadingCheckpointDiff
-                    ? "Loading checkpoint diff..."
+                  {isInitialDiffLoad
+                    ? selectedTurn
+                      ? "Loading turn diff..."
+                      : "Loading repo diff..."
                     : hasNoNetChanges
                       ? "No net changes in this selection."
                       : "No patch available for this selection."}

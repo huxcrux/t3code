@@ -2,7 +2,7 @@ import { assert, it } from "@effect/vitest";
 import { Effect, Schema } from "effect";
 
 import { ORCHESTRATION_WS_METHODS } from "./orchestration";
-import { WebSocketRequest } from "./ws";
+import { WebSocketRequest, WS_METHODS } from "./ws";
 
 const decodeWebSocketRequest = Schema.decodeUnknownEffect(WebSocketRequest);
 
@@ -53,6 +53,22 @@ it.effect("trims websocket request id and nested orchestration ids", () =>
     assert.strictEqual(parsed.body._tag, ORCHESTRATION_WS_METHODS.getTurnDiff);
     if (parsed.body._tag === ORCHESTRATION_WS_METHODS.getTurnDiff) {
       assert.strictEqual(parsed.body.threadId, "thread-1");
+    }
+  }),
+);
+
+it.effect("accepts git.diff requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeWebSocketRequest({
+      id: "req-2",
+      body: {
+        _tag: WS_METHODS.gitDiff,
+        cwd: " /tmp/project ",
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.gitDiff);
+    if (parsed.body._tag === WS_METHODS.gitDiff) {
+      assert.strictEqual(parsed.body.cwd, "/tmp/project");
     }
   }),
 );

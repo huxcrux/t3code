@@ -3,6 +3,8 @@ import type {
   GitCreateBranchInput,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
+  GitDiffInput,
+  GitDiffResult,
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
@@ -128,6 +130,7 @@ export interface NativeApi {
   };
   git: {
     // Existing branch/worktree API
+    diff: (input: GitDiffInput) => Promise<GitDiffResult>;
     listBranches: (input: GitListBranchesInput) => Promise<GitListBranchesResult>;
     createWorktree: (input: GitCreateWorktreeInput) => Promise<GitCreateWorktreeResult>;
     removeWorktree: (input: GitRemoveWorktreeInput) => Promise<void>;
