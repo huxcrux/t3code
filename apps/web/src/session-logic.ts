@@ -48,12 +48,14 @@ export interface PendingApproval {
   requestId: ApprovalRequestId;
   requestKind: "command" | "file-read" | "file-change";
   createdAt: string;
+  turnId: TurnId | null;
   detail?: string;
 }
 
 export interface PendingUserInput {
   requestId: ApprovalRequestId;
   createdAt: string;
+  turnId: TurnId | null;
   questions: ReadonlyArray<UserInputQuestion>;
 }
 
@@ -196,6 +198,7 @@ export function derivePendingApprovals(
         requestId,
         requestKind,
         createdAt: activity.createdAt,
+        turnId: activity.turnId,
         ...(detail ? { detail } : {}),
       });
       continue;
@@ -294,6 +297,7 @@ export function derivePendingUserInputs(
       openByRequestId.set(requestId, {
         requestId,
         createdAt: activity.createdAt,
+        turnId: activity.turnId,
         questions,
       });
       continue;
