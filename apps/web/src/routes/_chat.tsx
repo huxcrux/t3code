@@ -10,6 +10,7 @@ import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { resolveShortcutCommand } from "../keybindings";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { useThreadSelectionStore } from "../threadSelectionStore";
+import { ThreadNotifications } from "../components/ThreadNotifications";
 import { Sidebar, SidebarProvider } from "~/components/ui/sidebar";
 import { resolveSidebarNewThreadEnvMode } from "~/components/Sidebar.logic";
 import { useAppSettings } from "~/appSettings";
@@ -112,6 +113,9 @@ function ChatRouteLayout() {
   return (
     <SidebarProvider defaultOpen>
       <ChatRouteGlobalShortcuts />
+      <ThreadNotifications />
+      <ChatRouteGlobalShortcuts />
+      <ThreadNotifications />
       <Sidebar
         side="left"
         collapsible="offcanvas"

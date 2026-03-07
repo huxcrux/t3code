@@ -1322,17 +1322,17 @@ export default function Sidebar() {
                               onPointerDownCapture={handleProjectTitlePointerDownCapture}
                               onClick={(event) => handleProjectTitleClick(event, project.id)}
                               onKeyDown={(event) => handleProjectTitleKeyDown(event, project.id)}
-                              onContextMenu={(event) => {
-                                event.preventDefault();
-                                void handleProjectContextMenu(project.id, {
-                                  x: event.clientX,
-                                  y: event.clientY,
-                                });
-                              }}
-                            >
-                              <ChevronRightIcon
-                                className={`-ml-0.5 size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150 ${
-                                  project.expanded ? "rotate-90" : ""
+                            onContextMenu={(event) => {
+                              event.preventDefault();
+                              void handleProjectContextMenu(project.id, {
+                                x: event.clientX,
+                                y: event.clientY,
+                              });
+                            }}
+                          >
+                            <ChevronRightIcon
+                              className={`-ml-0.5 size-3.5 shrink-0 text-muted-foreground/70 transition-transform duration-150 ${
+                                project.expanded ? "rotate-90" : ""
                                 }`}
                               />
                               <ProjectFavicon cwd={project.cwd} />

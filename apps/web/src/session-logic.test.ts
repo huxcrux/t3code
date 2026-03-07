@@ -6,6 +6,7 @@ import {
   deriveActivePlanState,
   PROVIDER_OPTIONS,
   derivePendingApprovals,
+  deriveThreadDerivedStatus,
   derivePendingUserInputs,
   deriveTimelineEntries,
   deriveWorkLogEntries,
@@ -34,6 +35,20 @@ function makeActivity(overrides: {
     payload,
     turnId: overrides.turnId ? TurnId.makeUnsafe(overrides.turnId) : null,
     ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
+  };
+}
+
+function makeThreadStatusInput(
+  overrides: Partial<Parameters<typeof deriveThreadDerivedStatus>[0]> = {},
+): Parameters<typeof deriveThreadDerivedStatus>[0] {
+  return {
+    activities: [],
+    messages: [],
+    proposedPlans: [],
+    session: null,
+    latestTurn: null,
+    lastVisitedAt: undefined,
+    ...overrides,
   };
 }
 
@@ -320,6 +335,231 @@ describe("findLatestProposedPlan", () => {
     );
 
     expect(latestPlan?.planMarkdown).toBe("# Latest");
+  });
+});
+
+describe("deriveThreadDerivedStatus", () => {
+  it("prefers pending approval over other statuses", () => {
+    expect(
+      deriveThreadDerivedStatus(
+        makeThreadStatusInput({
+          activities: [
+            makeActivity({
+              id: "approval-open",
+              kind: "approval.requested",
+              summary: "Command approval requested",
+              tone: "approval",
+              payload: {
+                requestId: "req-approval",
+                requestKind: "command",
+              },
+            }),
+          ],
+          session: {
+            provider: "codex",
+            status: "running",
+            orchestrationStatus: "running",
+            updatedAt: "2026-02-23T00:00:00.000Z",
+            createdAt: "2026-02-23T00:00:00.000Z",
+          },
+        }),
+      ),
+    ).toBe("pending-approval");
+  });
+
+  it("shows pending user action for open question prompts", () => {
+    expect(
+      deriveThreadDerivedStatus(
+        makeThreadStatusInput({
+          activities: [
+            makeActivity({
+              id: "user-input-open",
+              kind: "user-input.requested",
+              summary: "User input requested",
+              tone: "info",
+              payload: {
+                requestId: "req-user-input",
+                questions: [
+                  {
+                    id: "sandbox_mode",
+                    header: "Sandbox",
+                    question: "Which mode should be used?",
+                    options: [
+                      {
+                        label: "workspace-write",
+                        description: "Allow workspace writes only",
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+          ],
+          session: {
+            provider: "codex",
+            status: "running",
+            orchestrationStatus: "running",
+            activeTurnId: TurnId.makeUnsafe("turn-1"),
+            updatedAt: "2026-02-23T00:00:00.000Z",
+            createdAt: "2026-02-23T00:00:00.000Z",
+          },
+        }),
+      ),
+    ).toBe("pending-user-action");
+  });
+
+  it("shows pending user action for the latest turn's proposed plan", () => {
+    expect(
+      deriveThreadDerivedStatus(
+        makeThreadStatusInput({
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-1"),
+            state: "completed",
+            requestedAt: "2026-02-23T00:00:00.000Z",
+            startedAt: "2026-02-23T00:00:01.000Z",
+            completedAt: "2026-02-23T00:00:05.000Z",
+            assistantMessageId: null,
+          },
+          proposedPlans: [
+            {
+              id: "plan:thread-1:turn:turn-1",
+              turnId: TurnId.makeUnsafe("turn-1"),
+              planMarkdown: "# Ship it",
+              createdAt: "2026-02-23T00:00:04.000Z",
+              updatedAt: "2026-02-23T00:00:04.000Z",
+            },
+          ],
+          lastVisitedAt: "2026-02-23T00:00:05.000Z",
+        }),
+      ),
+    ).toBe("pending-user-action");
+  });
+
+  it("does not show pending user action after a later assistant reply for the same turn", () => {
+    expect(
+      deriveThreadDerivedStatus(
+        makeThreadStatusInput({
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-1"),
+            state: "completed",
+            requestedAt: "2026-02-23T00:00:00.000Z",
+            startedAt: "2026-02-23T00:00:01.000Z",
+            completedAt: "2026-02-23T00:00:05.000Z",
+            assistantMessageId: MessageId.makeUnsafe("assistant-1"),
+          },
+          proposedPlans: [
+            {
+              id: "plan:thread-1:turn:turn-1",
+              turnId: TurnId.makeUnsafe("turn-1"),
+              planMarkdown: "# Ship it",
+              createdAt: "2026-02-23T00:00:03.000Z",
+              updatedAt: "2026-02-23T00:00:03.000Z",
+            },
+          ],
+          messages: [
+            {
+              id: MessageId.makeUnsafe("assistant-1"),
+              role: "assistant",
+              text: "Implemented.",
+              createdAt: "2026-02-23T00:00:04.000Z",
+              completedAt: "2026-02-23T00:00:04.000Z",
+              streaming: false,
+            },
+          ],
+          lastVisitedAt: "2026-02-23T00:00:05.000Z",
+        }),
+      ),
+    ).toBeNull();
+  });
+
+  it("keeps running for active turns when only stale older plans exist", () => {
+    expect(
+      deriveThreadDerivedStatus(
+        makeThreadStatusInput({
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-2"),
+            state: "running",
+            requestedAt: "2026-02-23T00:00:00.000Z",
+            startedAt: "2026-02-23T00:00:01.000Z",
+            completedAt: null,
+            assistantMessageId: null,
+          },
+          proposedPlans: [
+            {
+              id: "plan:thread-1:turn:turn-1",
+              turnId: TurnId.makeUnsafe("turn-1"),
+              planMarkdown: "# Old plan",
+              createdAt: "2026-02-23T00:00:02.000Z",
+              updatedAt: "2026-02-23T00:00:02.000Z",
+            },
+          ],
+          session: {
+            provider: "codex",
+            status: "running",
+            orchestrationStatus: "running",
+            activeTurnId: TurnId.makeUnsafe("turn-2"),
+            updatedAt: "2026-02-23T00:00:03.000Z",
+            createdAt: "2026-02-23T00:00:03.000Z",
+          },
+        }),
+      ),
+    ).toBe("working");
+  });
+
+  it("falls through to completed when prompts are resolved", () => {
+    expect(
+      deriveThreadDerivedStatus(
+        makeThreadStatusInput({
+          activities: [
+            makeActivity({
+              id: "user-input-open",
+              createdAt: "2026-02-23T00:00:01.000Z",
+              kind: "user-input.requested",
+              summary: "User input requested",
+              tone: "info",
+              payload: {
+                requestId: "req-user-input",
+                questions: [
+                  {
+                    id: "approval",
+                    header: "Approval",
+                    question: "Continue?",
+                    options: [
+                      {
+                        label: "yes",
+                        description: "Continue execution",
+                      },
+                    ],
+                  },
+                ],
+              },
+            }),
+            makeActivity({
+              id: "user-input-resolved",
+              createdAt: "2026-02-23T00:00:02.000Z",
+              kind: "user-input.resolved",
+              summary: "User input submitted",
+              tone: "info",
+              payload: {
+                requestId: "req-user-input",
+                answers: {
+                  approval: "yes",
+                },
+              },
+            }),
+          ],
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-1"),
+            state: "completed",
+            requestedAt: "2026-02-23T00:00:00.000Z",
+            startedAt: "2026-02-23T00:00:01.000Z",
+            completedAt: "2026-02-23T00:00:05.000Z",
+            assistantMessageId: null,
+          },
+          lastVisitedAt: "2026-02-23T00:00:04.000Z",
+        }),
+      ),
+    ).toBe("completed");
   });
 });
 
