@@ -236,6 +236,49 @@ function SettingsRouteView() {
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Time</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Control how timestamps are shown across chat history and diffs.
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Use 24-hour timestamps</p>
+                  <p className="text-xs text-muted-foreground">
+                    Show times like <code>13:42:09</code> instead of <code>1:42:09 PM</code>.
+                  </p>
+                </div>
+                <Switch
+                  checked={settings.use24HourTimestamps}
+                  onCheckedChange={(checked) =>
+                    updateSettings({
+                      use24HourTimestamps: Boolean(checked),
+                    })
+                  }
+                  aria-label="Use 24-hour timestamps"
+                />
+              </div>
+
+              {settings.use24HourTimestamps !== defaults.use24HourTimestamps ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        use24HourTimestamps: defaults.use24HourTimestamps,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Codex App Server</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   These overrides apply to new sessions and let you use a non-default Codex install.

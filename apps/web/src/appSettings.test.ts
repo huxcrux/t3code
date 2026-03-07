@@ -1,11 +1,22 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 
 import {
+  getAppSettingsSnapshot,
   getAppModelOptions,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
 } from "./appSettings";
+
+describe("getAppSettingsSnapshot", () => {
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("defaults 24-hour timestamps to disabled", () => {
+    expect(getAppSettingsSnapshot().use24HourTimestamps).toBe(false);
+  });
+});
 
 describe("normalizeCustomModelSlugs", () => {
   it("normalizes aliases, removes built-ins, and deduplicates values", () => {
