@@ -1,37 +1,118 @@
 import type { ThreadId } from "@t3tools/contracts";
 
-import { deriveThreadDerivedStatus } from "./session-logic";
+import {
+  derivePendingApprovals,
+  derivePendingUserInputs,
+  deriveThreadDerivedStatus,
+  hasPendingProposedPlanAction,
+} from "./session-logic";
 import type { AppNotificationScope } from "./appSettings";
+import type { ProposedPlan } from "./types";
 import type { Thread } from "./types";
 
 export type ThreadNotificationKind = "user-input-required" | "completed";
+export interface ThreadNotificationEvent {
+  kind: ThreadNotificationKind;
+  notificationId: string;
+}
 
 function isUserActionStatus(status: ReturnType<typeof deriveThreadDerivedStatus>): boolean {
   return status === "pending-approval" || status === "pending-user-action";
 }
 
-export function deriveThreadNotificationKind(
+function deriveLatestPlanForCurrentTurn(thread: Pick<Thread, "proposedPlans" | "latestTurn">): ProposedPlan | null {
+  if (!thread.latestTurn) {
+    return null;
+  }
+
+  return [...thread.proposedPlans]
+    .filter((proposedPlan) => proposedPlan.turnId === thread.latestTurn?.turnId)
+    .toSorted(
+      (left, right) =>
+        left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
+    )
+    .at(-1) ?? null;
+}
+
+function deriveUserActionNotificationEvent(thread: Thread): ThreadNotificationEvent | null {
+  const status = deriveThreadDerivedStatus(thread);
+  if (!isUserActionStatus(status)) {
+    return null;
+  }
+
+  const [oldestPendingApproval] = derivePendingApprovals(thread.activities);
+  if (oldestPendingApproval) {
+    return {
+      kind: "user-input-required",
+      notificationId: `approval:${oldestPendingApproval.requestId}`,
+    };
+  }
+
+  const [oldestPendingUserInput] = derivePendingUserInputs(thread.activities);
+  if (oldestPendingUserInput) {
+    return {
+      kind: "user-input-required",
+      notificationId: `user-input:${oldestPendingUserInput.requestId}`,
+    };
+  }
+
+  if (hasPendingProposedPlanAction(thread.proposedPlans, thread.latestTurn, thread.messages)) {
+    const latestPlan = deriveLatestPlanForCurrentTurn(thread);
+    if (latestPlan) {
+      return {
+        kind: "user-input-required",
+        notificationId: `plan:${latestPlan.id}:${latestPlan.updatedAt}`,
+      };
+    }
+  }
+
+  return {
+    kind: "user-input-required",
+    notificationId: `user-action:${thread.id}:${thread.latestTurn?.turnId ?? "none"}:${thread.updatedAt}`,
+  };
+}
+
+function deriveCompletionNotificationEvent(thread: Thread): ThreadNotificationEvent | null {
+  const completedAt = thread.latestTurn?.completedAt;
+  const turnId = thread.latestTurn?.turnId;
+  if (!completedAt || !turnId) {
+    return null;
+  }
+
+  return {
+    kind: "completed",
+    notificationId: `completed:${thread.id}:${turnId}:${completedAt}`,
+  };
+}
+
+export function deriveThreadNotificationEvent(
   previousThread: Thread | undefined,
   nextThread: Thread,
-): ThreadNotificationKind | null {
-  const previousStatus = previousThread ? deriveThreadDerivedStatus(previousThread) : null;
-  const nextStatus = deriveThreadDerivedStatus(nextThread);
-
-  if (isUserActionStatus(nextStatus) && !isUserActionStatus(previousStatus)) {
-    return "user-input-required";
+): ThreadNotificationEvent | null {
+  const nextUserActionEvent = deriveUserActionNotificationEvent(nextThread);
+  if (nextUserActionEvent) {
+    const previousUserActionEvent = previousThread
+      ? deriveUserActionNotificationEvent(previousThread)
+      : null;
+    if (previousUserActionEvent?.notificationId === nextUserActionEvent.notificationId) {
+      return null;
+    }
+    return nextUserActionEvent;
   }
 
-  const previousCompletedAt = previousThread?.latestTurn?.completedAt ?? null;
-  const nextCompletedAt = nextThread.latestTurn?.completedAt ?? null;
-  if (
-    nextCompletedAt &&
-    nextCompletedAt !== previousCompletedAt &&
-    !isUserActionStatus(nextStatus)
-  ) {
-    return "completed";
+  const nextCompletionEvent = deriveCompletionNotificationEvent(nextThread);
+  if (!nextCompletionEvent) {
+    return null;
   }
 
-  return null;
+  const previousCompletionEvent = previousThread
+    ? deriveCompletionNotificationEvent(previousThread)
+    : null;
+  if (previousCompletionEvent?.notificationId === nextCompletionEvent.notificationId) {
+    return null;
+  }
+
+  return nextCompletionEvent;
 }
 
 export function shouldNotifyForScope(input: {

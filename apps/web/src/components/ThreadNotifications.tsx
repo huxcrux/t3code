@@ -4,9 +4,10 @@ import { useEffect, useRef } from "react";
 
 import { useAppSettings } from "../appSettings";
 import { useStore } from "../store";
+import { createSeenNotificationRegistry } from "../threadNotificationRegistry";
 import {
   buildThreadNotificationCopy,
-  deriveThreadNotificationKind,
+  deriveThreadNotificationEvent,
   shouldNotifyForScope,
 } from "../threadNotifications";
 import type { Thread } from "../types";
@@ -33,6 +34,7 @@ export function ThreadNotifications() {
     select: (state) => selectedThreadIdFromRouterMatches(state.matches as Array<{ params: Record<string, string> }>),
   });
   const previousThreadByIdRef = useRef<Map<ThreadId, Thread>>(new Map());
+  const seenNotificationIdsRef = useRef(createSeenNotificationRegistry());
   const initializedRef = useRef(false);
 
   useEffect(() => {
@@ -68,14 +70,14 @@ export function ThreadNotifications() {
 
     const isBackground = document.visibilityState !== "visible" || !document.hasFocus();
     for (const thread of threads) {
-      const kind = deriveThreadNotificationKind(previousThreadByIdRef.current.get(thread.id), thread);
-      if (!kind) {
+      const event = deriveThreadNotificationEvent(previousThreadByIdRef.current.get(thread.id), thread);
+      if (!event) {
         continue;
       }
-      if (kind === "user-input-required" && !settings.notifyOnUserInputRequired) {
+      if (event.kind === "user-input-required" && !settings.notifyOnUserInputRequired) {
         continue;
       }
-      if (kind === "completed" && !settings.notifyOnCompleted) {
+      if (event.kind === "completed" && !settings.notifyOnCompleted) {
         continue;
       }
       if (
@@ -89,18 +91,30 @@ export function ThreadNotifications() {
         continue;
       }
 
-      const copy = buildThreadNotificationCopy(thread, kind);
-      const notification = new Notification(copy.title, {
-        body: copy.body,
-      });
-      notification.addEventListener("click", () => {
-        window.focus();
-        void navigate({
-          to: "/$threadId",
-          params: { threadId: thread.id },
+      if (seenNotificationIdsRef.current.has(event.notificationId)) {
+        continue;
+      }
+      seenNotificationIdsRef.current.mark(event.notificationId);
+
+      const copy = buildThreadNotificationCopy(thread, event.kind);
+      try {
+        const notification = new Notification(copy.title, {
+          body: copy.body,
         });
-        notification.close();
-      });
+        notification.addEventListener("click", () => {
+          window.focus();
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: thread.id },
+          });
+          notification.close();
+        });
+      } catch (error) {
+        console.warn("Failed to show thread notification", {
+          notificationId: event.notificationId,
+          error,
+        });
+      }
     }
 
     previousThreadByIdRef.current = nextThreadById;
