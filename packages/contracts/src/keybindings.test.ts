@@ -46,6 +46,12 @@ it.effect("parses keybinding rules", () =>
       command: "chat.newLocal",
     });
     assert.strictEqual(parsedLocal.command, "chat.newLocal");
+
+    const parsedProjectPicker = yield* decode(KeybindingRule, {
+      key: "mod+k",
+      command: "chat.projectPicker",
+    });
+    assert.strictEqual(parsedProjectPicker.command, "chat.projectPicker");
   }),
 );
 

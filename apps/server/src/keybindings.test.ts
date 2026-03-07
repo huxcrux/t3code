@@ -105,6 +105,32 @@ it.layer(NodeServices.layer)("keybindings", (it) => {
     }),
   );
 
+  it.effect("compiles the project picker default shortcut", () =>
+    Effect.sync(() => {
+      const compiled = compileResolvedKeybindingRule({
+        key: "mod+k",
+        command: "chat.projectPicker",
+        when: "!terminalFocus",
+      });
+
+      assert.deepEqual(compiled, {
+        command: "chat.projectPicker",
+        shortcut: {
+          key: "k",
+          metaKey: false,
+          ctrlKey: false,
+          shiftKey: false,
+          altKey: false,
+          modKey: true,
+        },
+        whenAst: {
+          type: "not",
+          node: { type: "identifier", name: "terminalFocus" },
+        },
+      });
+    }),
+  );
+
   it.effect("encodes resolved plus-key shortcuts", () =>
     Effect.gen(function* () {
       const encoded = yield* Schema.encodeEffect(ResolvedKeybindingFromConfig)({
