@@ -2,8 +2,9 @@ import { useCallback, useSyncExternalStore } from "react";
 import { Option, Schema } from "effect";
 import { type ProviderKind } from "@t3tools/contracts";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
+import { normalizePlanModeKeyword } from "./planModeKeyword";
 
-const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
+export const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
@@ -21,6 +22,12 @@ const AppSettingsSchema = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
+  enablePlanModeKeywordTrigger: Schema.Boolean.pipe(
+    Schema.withConstructorDefault(() => Option.some(false)),
+  ),
+  planModeKeyword: Schema.String.check(Schema.isMaxLength(64)).pipe(
+    Schema.withConstructorDefault(() => Option.some("plan")),
+  ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
@@ -32,11 +39,11 @@ export interface AppModelOption {
   isCustom: boolean;
 }
 
-const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
+export const APP_SETTINGS_DEFAULTS = AppSettingsSchema.makeUnsafe({});
 
 let listeners: Array<() => void> = [];
 let cachedRawSettings: string | null | undefined;
-let cachedSnapshot: AppSettings = DEFAULT_APP_SETTINGS;
+let cachedSnapshot: AppSettings = APP_SETTINGS_DEFAULTS;
 
 export function normalizeCustomModelSlugs(
   models: Iterable<string | null | undefined>,
@@ -70,6 +77,7 @@ export function normalizeCustomModelSlugs(
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {
     ...settings,
+    planModeKeyword: normalizePlanModeKeyword(settings.planModeKeyword),
     customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
   };
 }
@@ -170,19 +178,19 @@ function emitChange(): void {
 
 function parsePersistedSettings(value: string | null): AppSettings {
   if (!value) {
-    return DEFAULT_APP_SETTINGS;
+    return APP_SETTINGS_DEFAULTS;
   }
 
   try {
     return normalizeAppSettings(Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(value));
   } catch {
-    return DEFAULT_APP_SETTINGS;
+    return APP_SETTINGS_DEFAULTS;
   }
 }
 
 export function getAppSettingsSnapshot(): AppSettings {
   if (typeof window === "undefined") {
-    return DEFAULT_APP_SETTINGS;
+    return APP_SETTINGS_DEFAULTS;
   }
 
   const raw = window.localStorage.getItem(APP_SETTINGS_STORAGE_KEY);
@@ -231,7 +239,7 @@ export function useAppSettings() {
   const settings = useSyncExternalStore(
     subscribe,
     getAppSettingsSnapshot,
-    () => DEFAULT_APP_SETTINGS,
+    () => APP_SETTINGS_DEFAULTS,
   );
 
   const updateSettings = useCallback((patch: Partial<AppSettings>) => {
@@ -246,7 +254,7 @@ export function useAppSettings() {
   }, []);
 
   const resetSettings = useCallback(() => {
-    persistSettings(DEFAULT_APP_SETTINGS);
+    persistSettings(APP_SETTINGS_DEFAULTS);
     emitChange();
   }, []);
 
@@ -254,6 +262,6 @@ export function useAppSettings() {
     settings,
     updateSettings,
     resetSettings,
-    defaults: DEFAULT_APP_SETTINGS,
+    defaults: APP_SETTINGS_DEFAULTS,
   } as const;
 }

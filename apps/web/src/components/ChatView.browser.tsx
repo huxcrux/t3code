@@ -19,6 +19,7 @@ import { page } from "vitest/browser";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
 
+import { APP_SETTINGS_STORAGE_KEY } from "../appSettings";
 import { useComposerDraftStore } from "../composerDraftStore";
 import { getRouter } from "../router";
 import { useStore } from "../store";
@@ -462,6 +463,22 @@ async function waitForInteractionModeButton(expectedLabel: "Chat" | "Plan"): Pro
       ) as HTMLButtonElement | null,
     `Unable to find ${expectedLabel} interaction mode button.`,
   );
+}
+
+function setPersistedAppSettings(patch: Record<string, unknown>): void {
+  localStorage.setItem(APP_SETTINGS_STORAGE_KEY, JSON.stringify(patch));
+}
+
+async function typeIntoComposer(text: string): Promise<void> {
+  const store = useComposerDraftStore.getState();
+  const currentPrompt = store.draftsByThreadId[THREAD_ID]?.prompt ?? "";
+  store.setPrompt(THREAD_ID, `${currentPrompt}${text}`);
+  await waitForLayout();
+}
+
+async function setComposerText(text: string): Promise<void> {
+  useComposerDraftStore.getState().setPrompt(THREAD_ID, text);
+  await waitForLayout();
 }
 
 async function waitForImagesToLoad(scope: ParentNode): Promise<void> {
@@ -952,6 +969,58 @@ describe("ChatView timeline estimator parity (full app)", () => {
       await vi.waitFor(
         () => {
           expect(document.body.textContent).toContain("deep hidden detail only after expand");
+        },
+        { timeout: 8_000, interval: 16 },
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("does not auto-switch to plan mode while the keyword trigger is disabled", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-target-keyword-disabled" as MessageId,
+        targetText: "keyword disabled",
+      }),
+    });
+
+    try {
+      await typeIntoComposer("plan");
+
+      const modeButton = await waitForInteractionModeButton("Chat");
+      expect(modeButton.title).toContain("enter plan mode");
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("keeps manual plan mode active when the keyword is absent", async () => {
+    setPersistedAppSettings({
+      enablePlanModeKeywordTrigger: true,
+      planModeKeyword: "plan",
+    });
+
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-target-manual-plan" as MessageId,
+        targetText: "manual plan",
+      }),
+    });
+
+    try {
+      const modeButton = await waitForInteractionModeButton("Chat");
+      modeButton.click();
+      await waitForLayout();
+      await setComposerText("write implementation details");
+
+      await vi.waitFor(
+        async () => {
+          expect((await waitForInteractionModeButton("Plan")).title).toContain(
+            "return to normal chat mode",
+          );
         },
         { timeout: 8_000, interval: 16 },
       );

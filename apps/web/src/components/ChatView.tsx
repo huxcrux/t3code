@@ -205,6 +205,11 @@ import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import { getAppModelOptions, resolveAppModelSelection, useAppSettings } from "../appSettings";
 import {
+  INITIAL_PLAN_MODE_KEYWORD_STATE,
+  promptMatchesPlanModeKeyword,
+  reducePlanModeKeywordState,
+} from "../planModeKeyword";
+import {
   type ComposerImageAttachment,
   type DraftThreadEnvMode,
   type DraftThreadState,
@@ -264,6 +269,7 @@ const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
 const WORKTREE_BRANCH_PREFIX = "t3code";
+const INTERACTION_MODE_AUTO_FLASH_MS = 900;
 
 function readLastInvokedScriptByProjectFromStorage(): Record<string, string> {
   const stored = localStorage.getItem(LAST_INVOKED_SCRIPT_BY_PROJECT_KEY);
@@ -613,6 +619,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
     (store) => store.draftThreadsByThreadId[threadId] ?? null,
   );
   const promptRef = useRef(prompt);
+  const [planModeKeywordState, setPlanModeKeywordState] = useState(
+    INITIAL_PLAN_MODE_KEYWORD_STATE,
+  );
   const [isDragOverComposer, setIsDragOverComposer] = useState(false);
   const [expandedImage, setExpandedImage] = useState<ExpandedImagePreview | null>(null);
   const [optimisticUserMessages, setOptimisticUserMessages] = useState<ChatMessage[]>([]);
@@ -739,8 +748,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const activeThread = serverThread ?? localDraftThread;
   const runtimeMode =
     composerDraft.runtimeMode ?? activeThread?.runtimeMode ?? DEFAULT_RUNTIME_MODE;
-  const interactionMode =
+  const baseInteractionMode =
     composerDraft.interactionMode ?? activeThread?.interactionMode ?? DEFAULT_INTERACTION_MODE;
+  const keywordMatchedPlanMode =
+    settings.enablePlanModeKeywordTrigger &&
+    promptMatchesPlanModeKeyword(prompt, settings.planModeKeyword);
+  const autoKeywordOverrideActive =
+    baseInteractionMode === "default" &&
+    !planModeKeywordState.keywordSuppressedForCurrentDraft &&
+    keywordMatchedPlanMode;
+  const effectiveInteractionMode = autoKeywordOverrideActive ? "plan" : baseInteractionMode;
   const isServerThread = serverThread !== undefined;
   const isLocalDraftThread = !isServerThread && localDraftThread !== undefined;
   const diffOpen = rawSearch.diff === "1";
@@ -924,7 +941,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
-    interactionMode === "plan" &&
+    effectiveInteractionMode === "plan" &&
     latestTurnSettled &&
     activeProposedPlan !== null;
   const activePendingApproval = pendingApprovals[0] ?? null;
@@ -934,6 +951,44 @@ export default function ChatView({ threadId }: ChatViewProps) {
     pendingUserInputs.length > 0 ||
     (showPlanFollowUpPrompt && activeProposedPlan !== null);
   const composerFooterHasWideActions = showPlanFollowUpPrompt || activePendingProgress !== null;
+  const isAutoSwitchedToPlan = autoKeywordOverrideActive;
+  const interactionModeButtonTitle = planModeKeywordState.keywordSuppressedForCurrentDraft
+    ? effectiveInteractionMode === "plan"
+      ? "Plan mode — keyword auto-switch ignored for this draft"
+      : "Default mode — keyword auto-switch ignored for this draft"
+    : isAutoSwitchedToPlan
+      ? "Plan mode — auto-switched by keyword, click to keep chat for this draft"
+      : effectiveInteractionMode === "plan"
+        ? "Plan mode — click to return to normal chat mode"
+        : "Default mode — click to enter plan mode";
+  const resetPlanModeKeywordDraftState = useCallback(() => {
+    setPlanModeKeywordState((existing) => {
+      if (
+        !existing.autoOverrideToPlan &&
+        !existing.keywordSuppressedForCurrentDraft &&
+        existing.lastAutoModeChangeAt === null
+      ) {
+        return existing;
+      }
+      return reducePlanModeKeywordState(existing, { type: "draft-reset" });
+    });
+  }, []);
+  const syncPlanModeKeywordState = useCallback(
+    (nextPrompt: string, nextBaseInteractionMode: ProviderInteractionMode) => {
+      const shouldAutoPlan =
+        settings.enablePlanModeKeywordTrigger &&
+        promptMatchesPlanModeKeyword(nextPrompt, settings.planModeKeyword);
+      setPlanModeKeywordState((existing) =>
+        reducePlanModeKeywordState(existing, {
+          type: "draft-evaluated",
+          baseInteractionMode: nextBaseInteractionMode,
+          shouldAutoPlan,
+          now: Date.now(),
+        }),
+      );
+    },
+    [settings.enablePlanModeKeywordTrigger, settings.planModeKeyword],
+  );
   useEffect(() => {
     if (!activePendingProgress) {
       return;
@@ -954,6 +1009,52 @@ export default function ChatView({ threadId }: ChatViewProps) {
   useEffect(() => {
     attachmentPreviewHandoffByMessageIdRef.current = attachmentPreviewHandoffByMessageId;
   }, [attachmentPreviewHandoffByMessageId]);
+  useEffect(() => {
+    setPlanModeKeywordState(INITIAL_PLAN_MODE_KEYWORD_STATE);
+  }, [threadId]);
+  useEffect(() => {
+    if (activePendingProgress?.activeQuestion && activePendingUserInput) {
+      return;
+    }
+    syncPlanModeKeywordState(prompt, baseInteractionMode);
+  }, [
+    activePendingProgress?.activeQuestion,
+    activePendingUserInput,
+    baseInteractionMode,
+    prompt,
+    syncPlanModeKeywordState,
+  ]);
+  useEffect(() => {
+    if (
+      activePendingProgress?.activeQuestion ||
+      activePendingUserInput ||
+      sendInFlightRef.current ||
+      prompt.length > 0 ||
+      composerImages.length > 0
+    ) {
+      return;
+    }
+    resetPlanModeKeywordDraftState();
+  }, [
+    activePendingProgress?.activeQuestion,
+    activePendingUserInput,
+    composerImages.length,
+    prompt.length,
+    resetPlanModeKeywordDraftState,
+  ]);
+  useEffect(() => {
+    if (planModeKeywordState.lastAutoModeChangeAt === null) {
+      return;
+    }
+    const timeoutId = window.setTimeout(() => {
+      setPlanModeKeywordState((existing) =>
+        reducePlanModeKeywordState(existing, { type: "flash-settled" }),
+      );
+    }, INTERACTION_MODE_AUTO_FLASH_MS);
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [planModeKeywordState.lastAutoModeChangeAt]);
   const clearAttachmentPreviewHandoffs = useCallback(() => {
     for (const timeoutId of Object.values(attachmentPreviewHandoffTimeoutByMessageIdRef.current)) {
       window.clearTimeout(timeoutId);
@@ -1651,17 +1752,44 @@ export default function ChatView({ threadId }: ChatViewProps) {
   );
 
   const handleInteractionModeChange = useCallback(
-    (mode: ProviderInteractionMode) => {
-      if (mode === interactionMode) return;
-      setComposerDraftInteractionMode(threadId, mode);
-      if (isLocalDraftThread) {
-        setDraftThreadContext(threadId, { interactionMode: mode });
+    (
+      mode: ProviderInteractionMode,
+      options?: {
+        source?: "manual" | "slash-command";
+      },
+    ) => {
+      const source = options?.source ?? "manual";
+      const shouldSuppress =
+        source === "manual" && (keywordMatchedPlanMode || autoKeywordOverrideActive);
+
+      if (source === "manual") {
+        setPlanModeKeywordState((existing) =>
+          reducePlanModeKeywordState(existing, {
+            type: "manual-mode-changed",
+            shouldSuppress,
+          }),
+        );
       }
+
+      if (mode !== baseInteractionMode) {
+        setComposerDraftInteractionMode(threadId, mode);
+        if (isLocalDraftThread) {
+          setDraftThreadContext(threadId, { interactionMode: mode });
+        }
+      }
+
+      if (source === "slash-command") {
+        resetPlanModeKeywordDraftState();
+      }
+
       scheduleComposerFocus();
     },
     [
-      interactionMode,
+      autoKeywordOverrideActive,
+      baseInteractionMode,
       isLocalDraftThread,
+      keywordMatchedPlanMode,
+      resetPlanModeKeywordDraftState,
       scheduleComposerFocus,
       setComposerDraftInteractionMode,
       setDraftThreadContext,
@@ -1669,8 +1797,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
     ],
   );
   const toggleInteractionMode = useCallback(() => {
-    handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
-  }, [handleInteractionModeChange, interactionMode]);
+    handleInteractionModeChange(effectiveInteractionMode === "plan" ? "default" : "plan");
+  }, [effectiveInteractionMode, handleInteractionModeChange]);
   const toggleRuntimeMode = useCallback(() => {
     void handleRuntimeModeChange(
       runtimeMode === "full-access" ? "approval-required" : "full-access",
@@ -2480,7 +2608,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
     const standaloneSlashCommand =
       composerImages.length === 0 ? parseStandaloneComposerSlashCommand(trimmed) : null;
     if (standaloneSlashCommand) {
-      await handleInteractionModeChange(standaloneSlashCommand);
+      await handleInteractionModeChange(standaloneSlashCommand, {
+        source: "slash-command",
+      });
       promptRef.current = "";
       clearComposerDraftContent(activeThread.id);
       setComposerHighlightedItemId(null);
@@ -2612,7 +2742,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           title,
           model: threadCreateModel,
           runtimeMode,
-          interactionMode,
+          interactionMode: effectiveInteractionMode,
           branch: nextThreadBranch,
           worktreePath: nextThreadWorktreePath,
           createdAt: activeThread.createdAt,
@@ -2662,7 +2792,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           createdAt: messageCreatedAt,
           ...(selectedModel ? { model: selectedModel } : {}),
           runtimeMode,
-          interactionMode,
+          interactionMode: effectiveInteractionMode,
         });
       }
 
@@ -2686,10 +2816,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
         provider: selectedProvider,
         assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
         runtimeMode,
-        interactionMode,
+        interactionMode: effectiveInteractionMode,
         createdAt: messageCreatedAt,
       });
       turnStartSucceeded = true;
+      resetPlanModeKeywordDraftState();
       if (isFirstMessage) {
         clearDraftThread(threadIdForSend);
       }
@@ -2973,6 +3104,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           planSidebarDismissedForTurnRef.current = null;
           setPlanSidebarOpen(true);
         }
+        resetPlanModeKeywordDraftState();
         sendInFlightRef.current = false;
       } catch (err) {
         setOptimisticUserMessages((existing) =>
@@ -2996,6 +3128,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       persistThreadSettingsForNextTurn,
       resetSendPhase,
       runtimeMode,
+      resetPlanModeKeywordDraftState,
       selectedModel,
       selectedModelOptionsForDispatch,
       providerOptionsForDispatch,
@@ -3342,12 +3475,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
               expandCollapsedComposerCursor(nextPrompt, nextCursor),
             ),
       );
+      syncPlanModeKeywordState(nextPrompt, baseInteractionMode);
     },
     [
       activePendingProgress?.activeQuestion,
       activePendingUserInput,
+      baseInteractionMode,
       onChangeActivePendingUserInputCustomAnswer,
       setPrompt,
+      syncPlanModeKeywordState,
     ],
   );
 
@@ -3595,7 +3731,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       />
                     </div>
                   )}
-
                   {!isComposerApprovalState &&
                     pendingUserInputs.length === 0 &&
                     composerImages.length > 0 && (
@@ -3734,7 +3869,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                       {isComposerFooterCompact ? (
                         <CompactComposerControlsMenu
                           activePlan={Boolean(activePlan || activeProposedPlan || planSidebarOpen)}
-                          interactionMode={interactionMode}
+                          interactionMode={effectiveInteractionMode}
                           planSidebarOpen={planSidebarOpen}
                           runtimeMode={runtimeMode}
                           selectedEffort={selectedEffort}
@@ -3772,19 +3907,27 @@ export default function ChatView({ threadId }: ChatViewProps) {
 
                           <Button
                             variant="ghost"
-                            className="shrink-0 whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 sm:px-3"
+                            className={cn(
+                              "shrink-0 whitespace-nowrap px-2 sm:px-3",
+                              isAutoSwitchedToPlan
+                                ? "bg-primary/12 text-primary ring-1 ring-primary/30 hover:bg-primary/18 hover:text-primary"
+                                : effectiveInteractionMode === "plan"
+                                  ? "bg-accent/70 text-foreground/85 hover:bg-accent hover:text-foreground"
+                                  : "text-muted-foreground/70 hover:text-foreground/80",
+                              planModeKeywordState.keywordSuppressedForCurrentDraft &&
+                                !isAutoSwitchedToPlan &&
+                                "ring-1 ring-amber-500/25",
+                              planModeKeywordState.lastAutoModeChangeAt !== null &&
+                                "animate-[pulse_0.6s_ease-out_1]",
+                            )}
                             size="sm"
                             type="button"
                             onClick={toggleInteractionMode}
-                            title={
-                              interactionMode === "plan"
-                                ? "Plan mode — click to return to normal chat mode"
-                                : "Default mode — click to enter plan mode"
-                            }
+                            title={interactionModeButtonTitle}
                           >
                             <BotIcon />
                             <span className="sr-only sm:not-sr-only">
-                              {interactionMode === "plan" ? "Plan" : "Chat"}
+                              {effectiveInteractionMode === "plan" ? "Plan" : "Chat"}
                             </span>
                           </Button>
 

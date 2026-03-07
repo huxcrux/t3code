@@ -1,11 +1,38 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  APP_SETTINGS_DEFAULTS,
   getAppModelOptions,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
+  getAppSettingsSnapshot,
   resolveAppModelSelection,
 } from "./appSettings";
+import { DEFAULT_PLAN_MODE_KEYWORD, normalizePlanModeKeyword } from "./planModeKeyword";
+
+describe("app settings defaults", () => {
+  it("includes the plan keyword trigger settings", () => {
+    expect(APP_SETTINGS_DEFAULTS.enablePlanModeKeywordTrigger).toBe(false);
+    expect(APP_SETTINGS_DEFAULTS.planModeKeyword).toBe(DEFAULT_PLAN_MODE_KEYWORD);
+  });
+
+  it("falls back to default settings when nothing is persisted", () => {
+    expect(getAppSettingsSnapshot()).toMatchObject({
+      enablePlanModeKeywordTrigger: false,
+      planModeKeyword: DEFAULT_PLAN_MODE_KEYWORD,
+    });
+  });
+});
+
+describe("normalizePlanModeKeyword", () => {
+  it("trims and collapses whitespace", () => {
+    expect(normalizePlanModeKeyword("   ship   plan   ")).toBe("ship plan");
+  });
+
+  it("falls back to the default keyword when blank", () => {
+    expect(normalizePlanModeKeyword("   ")).toBe(DEFAULT_PLAN_MODE_KEYWORD);
+  });
+});
 
 describe("normalizeCustomModelSlugs", () => {
   it("normalizes aliases, removes built-ins, and deduplicates values", () => {

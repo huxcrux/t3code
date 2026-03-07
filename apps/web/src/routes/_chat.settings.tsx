@@ -471,6 +471,74 @@ function SettingsRouteView() {
 
             <section className="rounded-2xl border border-border bg-card p-5">
               <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">Composer</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Control how the chat composer reacts before a message is sent.
+                </p>
+              </div>
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">
+                      Auto-switch to plan mode from keyword
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Matching drafts temporarily switch the composer into plan mode.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.enablePlanModeKeywordTrigger}
+                    onCheckedChange={(checked) =>
+                      updateSettings({
+                        enablePlanModeKeywordTrigger: Boolean(checked),
+                      })
+                    }
+                    aria-label="Auto-switch to plan mode from keyword"
+                  />
+                </div>
+
+                <label htmlFor="plan-mode-keyword" className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Plan mode keyword</span>
+                  <Input
+                    id="plan-mode-keyword"
+                    value={settings.planModeKeyword}
+                    onChange={(event) =>
+                      updateSettings({
+                        planModeKeyword: event.target.value,
+                      })
+                    }
+                    placeholder="plan"
+                    maxLength={64}
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Manual mode changes ignore keyword switching until the current draft is cleared
+                    or sent.
+                  </span>
+                </label>
+              </div>
+
+              {settings.enablePlanModeKeywordTrigger !== defaults.enablePlanModeKeywordTrigger ||
+              settings.planModeKeyword !== defaults.planModeKeyword ? (
+                <div className="mt-3 flex justify-end">
+                  <Button
+                    size="xs"
+                    variant="outline"
+                    onClick={() =>
+                      updateSettings({
+                        enablePlanModeKeywordTrigger: defaults.enablePlanModeKeywordTrigger,
+                        planModeKeyword: defaults.planModeKeyword,
+                      })
+                    }
+                  >
+                    Restore default
+                  </Button>
+                </div>
+              ) : null}
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Keybindings</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
                   Open the persisted <code>keybindings.json</code> file to edit advanced bindings
