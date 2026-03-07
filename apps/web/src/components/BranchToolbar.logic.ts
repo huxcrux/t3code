@@ -33,10 +33,17 @@ export function resolveBranchToolbarValue(input: {
   activeWorktreePath: string | null;
   activeThreadBranch: string | null;
   currentGitBranch: string | null;
+  implicitWorktreeBaseBranch?: string | null;
 }): string | null {
-  const { envMode, activeWorktreePath, activeThreadBranch, currentGitBranch } = input;
+  const {
+    envMode,
+    activeWorktreePath,
+    activeThreadBranch,
+    currentGitBranch,
+    implicitWorktreeBaseBranch,
+  } = input;
   if (envMode === "worktree" && !activeWorktreePath) {
-    return activeThreadBranch ?? currentGitBranch;
+    return activeThreadBranch ?? implicitWorktreeBaseBranch ?? currentGitBranch;
   }
   return currentGitBranch ?? activeThreadBranch;
 }

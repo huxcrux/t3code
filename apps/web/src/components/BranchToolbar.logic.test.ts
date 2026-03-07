@@ -47,6 +47,19 @@ describe("resolveBranchToolbarValue", () => {
         activeWorktreePath: null,
         activeThreadBranch: null,
         currentGitBranch: "main",
+        implicitWorktreeBaseBranch: "main",
+      }),
+    ).toBe("main");
+  });
+
+  it("prefers the configured implicit worktree base branch over the current branch", () => {
+    expect(
+      resolveBranchToolbarValue({
+        envMode: "worktree",
+        activeWorktreePath: null,
+        activeThreadBranch: null,
+        currentGitBranch: "feature/current",
+        implicitWorktreeBaseBranch: "main",
       }),
     ).toBe("main");
   });
@@ -58,6 +71,7 @@ describe("resolveBranchToolbarValue", () => {
         activeWorktreePath: null,
         activeThreadBranch: "feature/base",
         currentGitBranch: "main",
+        implicitWorktreeBaseBranch: "main",
       }),
     ).toBe("feature/base");
   });
@@ -69,6 +83,7 @@ describe("resolveBranchToolbarValue", () => {
         activeWorktreePath: null,
         activeThreadBranch: "feature/base",
         currentGitBranch: "main",
+        implicitWorktreeBaseBranch: "feature/base",
       }),
     ).toBe("main");
   });

@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  getAppSettingsSnapshot,
   getAppModelOptions,
   getSlashModelOptions,
+  NEW_THREAD_ENV_MODE_OPTIONS,
+  NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS,
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
 } from "./appSettings";
@@ -19,6 +22,42 @@ describe("normalizeCustomModelSlugs", () => {
         null,
       ]),
     ).toEqual(["custom/internal-model"]);
+  });
+});
+
+describe("getAppSettingsSnapshot", () => {
+  it("hydrates older persisted settings with new-thread defaults", () => {
+    window.localStorage.clear();
+    window.localStorage.setItem(
+      "t3code:app-settings:v1",
+      JSON.stringify({
+        confirmThreadDelete: false,
+        enableAssistantStreaming: true,
+      }),
+    );
+
+    expect(getAppSettingsSnapshot()).toMatchObject({
+      confirmThreadDelete: false,
+      enableAssistantStreaming: true,
+      defaultNewThreadEnvMode: "local",
+      defaultNewWorktreeBaseBranchMode: "current",
+    });
+  });
+});
+
+describe("new-thread settings options", () => {
+  it("exposes the supported environment defaults", () => {
+    expect(NEW_THREAD_ENV_MODE_OPTIONS.map((option) => option.value)).toEqual([
+      "local",
+      "worktree",
+    ]);
+  });
+
+  it("exposes the supported base-branch defaults", () => {
+    expect(NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS.map((option) => option.value)).toEqual([
+      "current",
+      "default",
+    ]);
   });
 });
 

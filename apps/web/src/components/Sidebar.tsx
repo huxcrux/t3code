@@ -40,6 +40,7 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL } from "../branding";
+import { resolveFreshDraftEnvMode } from "../lib/threadDefaults";
 import { newCommandId, newProjectId, newThreadId } from "../lib/utils";
 import { useStore } from "../store";
 import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
@@ -440,11 +441,12 @@ export default function Sidebar() {
       const threadId = newThreadId();
       const createdAt = new Date().toISOString();
       return (async () => {
+        const nextDefaultEnvMode = resolveFreshDraftEnvMode(appSettings.defaultNewThreadEnvMode);
         setProjectDraftThreadId(projectId, threadId, {
           createdAt,
           branch: options?.branch ?? null,
           worktreePath: options?.worktreePath ?? null,
-          envMode: options?.envMode ?? "local",
+          envMode: options?.envMode ?? nextDefaultEnvMode,
           runtimeMode: DEFAULT_RUNTIME_MODE,
         });
 
@@ -462,6 +464,7 @@ export default function Sidebar() {
       routeThreadId,
       setDraftThreadContext,
       setProjectDraftThreadId,
+      appSettings.defaultNewThreadEnvMode,
     ],
   );
 
@@ -920,7 +923,11 @@ export default function Sidebar() {
           activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
         if (!projectId) return;
         event.preventDefault();
-        void handleNewThread(projectId);
+        void handleNewThread(projectId, {
+          branch: null,
+          worktreePath: null,
+          envMode: "local",
+        });
         return;
       }
 

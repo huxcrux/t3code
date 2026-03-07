@@ -4,7 +4,12 @@ import { useCallback, useState } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 
-import { MAX_CUSTOM_MODEL_LENGTH, useAppSettings } from "../appSettings";
+import {
+  MAX_CUSTOM_MODEL_LENGTH,
+  NEW_THREAD_ENV_MODE_OPTIONS,
+  NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS,
+  useAppSettings,
+} from "../appSettings";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
@@ -12,6 +17,7 @@ import { ensureNativeApi } from "../nativeApi";
 import { preferredTerminalEditor } from "../terminal-links";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import { Select, SelectItem, SelectPopup, SelectTrigger, SelectValue } from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { SidebarInset } from "~/components/ui/sidebar";
 
@@ -96,6 +102,8 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
+  const defaultNewThreadEnvMode = settings.defaultNewThreadEnvMode;
+  const defaultNewWorktreeBaseBranchMode = settings.defaultNewWorktreeBaseBranchMode;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
 
   const openKeybindingsFile = useCallback(() => {
@@ -289,6 +297,102 @@ function SettingsRouteView() {
                     Reset codex overrides
                   </Button>
                 </div>
+              </div>
+            </section>
+
+            <section className="rounded-2xl border border-border bg-card p-5">
+              <div className="mb-4">
+                <h2 className="text-sm font-medium text-foreground">New Threads</h2>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  Configure the default environment for standard new threads. Keyboard shortcuts
+                  with explicit behavior keep their current semantics.
+                </p>
+              </div>
+
+              <div className="space-y-5">
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Default environment</span>
+                  <Select
+                    items={NEW_THREAD_ENV_MODE_OPTIONS.map((option) => ({
+                      label: option.label,
+                      value: option.value,
+                    }))}
+                    value={defaultNewThreadEnvMode}
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      updateSettings({ defaultNewThreadEnvMode: value });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      {NEW_THREAD_ENV_MODE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">
+                    {NEW_THREAD_ENV_MODE_OPTIONS.find(
+                      (option) => option.value === defaultNewThreadEnvMode,
+                    )?.description ?? "Start standard new threads in the main project worktree."}
+                  </span>
+                </label>
+
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">
+                    Initial base branch for new worktrees
+                  </span>
+                  <Select
+                    items={NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS.map((option) => ({
+                      label: option.label,
+                      value: option.value,
+                    }))}
+                    value={defaultNewWorktreeBaseBranchMode}
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      updateSettings({ defaultNewWorktreeBaseBranchMode: value });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      {NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">
+                    {NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS.find(
+                      (option) => option.value === defaultNewWorktreeBaseBranchMode,
+                    )?.description ??
+                      "Seed fresh new-worktree drafts from the currently checked-out branch."}
+                  </span>
+                </label>
+
+                {(defaultNewThreadEnvMode !== defaults.defaultNewThreadEnvMode ||
+                  defaultNewWorktreeBaseBranchMode !== defaults.defaultNewWorktreeBaseBranchMode) && (
+                  <div className="flex justify-end">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        updateSettings({
+                          defaultNewThreadEnvMode: defaults.defaultNewThreadEnvMode,
+                          defaultNewWorktreeBaseBranchMode:
+                            defaults.defaultNewWorktreeBaseBranchMode,
+                        })
+                      }
+                    >
+                      Restore defaults
+                    </Button>
+                  </div>
+                )}
               </div>
             </section>
 

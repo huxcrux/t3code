@@ -12,7 +12,9 @@ import {
   useTransition,
 } from "react";
 
+import { useAppSettings } from "../appSettings";
 import { gitBranchesQueryOptions, gitQueryKeys, invalidateGitQueries } from "../lib/gitReactQuery";
+import { resolveImplicitWorktreeBaseBranch } from "../lib/threadDefaults";
 import { readNativeApi } from "../nativeApi";
 import {
   dedupeRemoteBranchesWithLocalMatches,
@@ -73,6 +75,7 @@ export function BranchToolbarBranchSelector({
   onComposerFocusRequest,
 }: BranchToolbarBranchSelectorProps) {
   const queryClient = useQueryClient();
+  const { settings } = useAppSettings();
   const [isBranchMenuOpen, setIsBranchMenuOpen] = useState(false);
   const [branchQuery, setBranchQuery] = useState("");
 
@@ -82,11 +85,18 @@ export function BranchToolbarBranchSelector({
     [branchesQuery.data?.branches],
   );
   const currentGitBranch = branches.find((branch) => branch.current)?.name ?? null;
+  const defaultGitBranch = branches.find((branch) => branch.isDefault)?.name ?? null;
+  const implicitWorktreeBaseBranch = resolveImplicitWorktreeBaseBranch({
+    defaultNewWorktreeBaseBranchMode: settings.defaultNewWorktreeBaseBranchMode,
+    currentBranch: currentGitBranch,
+    defaultBranch: defaultGitBranch,
+  });
   const canonicalActiveBranch = resolveBranchToolbarValue({
     envMode: effectiveEnvMode,
     activeWorktreePath,
     activeThreadBranch,
     currentGitBranch,
+    implicitWorktreeBaseBranch,
   });
   const branchNames = useMemo(() => branches.map((branch) => branch.name), [branches]);
   const branchByName = useMemo(
@@ -228,16 +238,16 @@ export function BranchToolbarBranchSelector({
       effectiveEnvMode !== "worktree" ||
       activeWorktreePath ||
       activeThreadBranch ||
-      !currentGitBranch
+      !implicitWorktreeBaseBranch
     ) {
       return;
     }
-    onSetThreadBranch(currentGitBranch, null);
+    onSetThreadBranch(implicitWorktreeBaseBranch, null);
   }, [
     activeThreadBranch,
     activeWorktreePath,
-    currentGitBranch,
     effectiveEnvMode,
+    implicitWorktreeBaseBranch,
     onSetThreadBranch,
   ]);
 

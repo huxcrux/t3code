@@ -2,10 +2,22 @@ import { useCallback, useSyncExternalStore } from "react";
 import { Option, Schema } from "effect";
 import { type ProviderKind } from "@t3tools/contracts";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
+import {
+  DEFAULT_NEW_THREAD_ENV_MODE_VALUES,
+  DEFAULT_NEW_WORKTREE_BASE_BRANCH_MODE_VALUES,
+  type DefaultNewThreadEnvMode,
+  type DefaultNewWorktreeBaseBranchMode,
+  NEW_THREAD_ENV_MODE_OPTIONS,
+  NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS,
+} from "./lib/threadDefaults";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
 const MAX_CUSTOM_MODEL_COUNT = 32;
 export const MAX_CUSTOM_MODEL_LENGTH = 256;
+const DefaultNewThreadEnvModeSchema = Schema.Literals(DEFAULT_NEW_THREAD_ENV_MODE_VALUES);
+const DefaultNewWorktreeBaseBranchModeSchema = Schema.Literals(
+  DEFAULT_NEW_WORKTREE_BASE_BRANCH_MODE_VALUES,
+);
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
 };
@@ -21,6 +33,12 @@ const AppSettingsSchema = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(
     Schema.withConstructorDefault(() => Option.some(false)),
   ),
+  defaultNewThreadEnvMode: DefaultNewThreadEnvModeSchema.pipe(
+    Schema.withConstructorDefault(() => Option.some("local")),
+  ),
+  defaultNewWorktreeBaseBranchMode: DefaultNewWorktreeBaseBranchModeSchema.pipe(
+    Schema.withConstructorDefault(() => Option.some("current")),
+  ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
@@ -31,6 +49,8 @@ export interface AppModelOption {
   name: string;
   isCustom: boolean;
 }
+export type { DefaultNewThreadEnvMode, DefaultNewWorktreeBaseBranchMode };
+export { NEW_THREAD_ENV_MODE_OPTIONS, NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS };
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
 
