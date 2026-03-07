@@ -95,6 +95,7 @@ const makeIsolatedGitCore = (gitService: GitServiceShape) =>
     const core = await Effect.runPromise(Effect.service(GitCore).pipe(Effect.provide(coreLayer)));
 
     return {
+      diffWorkingTree: (cwd) => core.diffWorkingTree(cwd),
       status: (input) => core.status(input),
       statusDetails: (cwd) => core.statusDetails(cwd),
       prepareCommitContext: (cwd) => core.prepareCommitContext(cwd),
@@ -1270,6 +1271,62 @@ it.layer(TestLayer)("git integration", (it) => {
         yield* writeTextFile(path.join(tmp, "README.md"), "updated\n");
         const dirty = yield* core.statusDetails(tmp);
         expect(dirty.hasWorkingTreeChanges).toBe(true);
+      }),
+    );
+
+    it.effect("returns an empty diff for a clean repo", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        const result = yield* core.diffWorkingTree(tmp);
+
+        expect(result.diff).toBe("");
+      }),
+    );
+
+    it.effect("returns unified diff for modified tracked files", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* writeTextFile(path.join(tmp, "README.md"), "updated\n");
+        const result = yield* core.diffWorkingTree(tmp);
+
+        expect(result.diff).toContain("diff --git a/README.md b/README.md");
+        expect(result.diff).toContain("+updated");
+      }),
+    );
+
+    it.effect("includes untracked files in working tree diff", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* initRepoWithCommit(tmp);
+        const core = yield* GitCore;
+
+        yield* writeTextFile(path.join(tmp, "new-file.ts"), "console.log('hi');\n");
+        const result = yield* core.diffWorkingTree(tmp);
+
+        expect(result.diff).toContain("diff --git a/new-file.ts b/new-file.ts");
+        expect(result.diff).toContain("+console.log('hi');");
+      }),
+    );
+
+    it.effect("diffs against the empty tree before the first commit", () =>
+      Effect.gen(function* () {
+        const tmp = yield* makeTmpDir();
+        yield* git(tmp, ["init"]);
+        yield* git(tmp, ["config", "user.email", "test@test.com"]);
+        yield* git(tmp, ["config", "user.name", "Test"]);
+        yield* writeTextFile(path.join(tmp, "README.md"), "first file\n");
+        const core = yield* GitCore;
+
+        const result = yield* core.diffWorkingTree(tmp);
+
+        expect(result.diff).toContain("diff --git a/README.md b/README.md");
+        expect(result.diff).toContain("+first file");
       }),
     );
 

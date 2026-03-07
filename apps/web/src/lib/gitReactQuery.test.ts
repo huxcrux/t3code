@@ -1,12 +1,24 @@
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, afterEach, vi } from "vitest";
+import type { NativeApi } from "@t3tools/contracts";
 import {
+  gitDiffQueryOptions,
   gitMutationKeys,
+  gitQueryKeys,
   gitPullMutationOptions,
   gitRunStackedActionMutationOptions,
 } from "./gitReactQuery";
+import * as nativeApi from "../nativeApi";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("gitMutationKeys", () => {
+  it("scopes diff keys by cwd", () => {
+    expect(gitQueryKeys.diff("/repo/a")).not.toEqual(gitQueryKeys.diff("/repo/b"));
+  });
+
   it("scopes stacked action keys by cwd", () => {
     expect(gitMutationKeys.runStackedAction("/repo/a")).not.toEqual(
       gitMutationKeys.runStackedAction("/repo/b"),
@@ -29,5 +41,17 @@ describe("git mutation options", () => {
   it("attaches cwd-scoped mutation key for pull", () => {
     const options = gitPullMutationOptions({ cwd: "/repo/a", queryClient });
     expect(options.mutationKey).toEqual(gitMutationKeys.pull("/repo/a"));
+  });
+
+  it("requests repo diff through the native git API", async () => {
+    const diff = vi.fn().mockResolvedValue({ diff: "patch" });
+    vi.spyOn(nativeApi, "ensureNativeApi").mockReturnValue({
+      git: { diff },
+    } as unknown as NativeApi);
+
+    const options = gitDiffQueryOptions("/repo/a");
+    await queryClient.fetchQuery(options);
+
+    expect(diff).toHaveBeenCalledWith({ cwd: "/repo/a" });
   });
 });

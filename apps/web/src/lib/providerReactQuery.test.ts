@@ -111,7 +111,7 @@ describe("checkpointDiffQueryOptions", () => {
     expect(getFullThreadDiff).not.toHaveBeenCalled();
   });
 
-  it("retries checkpoint-not-ready errors longer than generic failures", () => {
+  it("uses only a short generic retry budget for checkpoint availability errors", () => {
     const options = checkpointDiffQueryOptions({
       threadId,
       fromTurnCount: 1,
@@ -124,18 +124,16 @@ describe("checkpointDiffQueryOptions", () => {
       throw new Error("Expected retry to be a function.");
     }
 
-    expect(retry(1, new Error("Checkpoint turn count 2 exceeds current turn count 1."))).toBe(true);
+    expect(retry(0, new Error("Checkpoint ref is unavailable for turn 2."))).toBe(true);
     expect(
-      retry(11, new Error("Filesystem checkpoint is unavailable for turn 2 in thread thread-1.")),
+      retry(1, new Error("Filesystem checkpoint is unavailable for turn 2 in thread thread-1.")),
     ).toBe(true);
     expect(
-      retry(12, new Error("Filesystem checkpoint is unavailable for turn 2 in thread thread-1.")),
+      retry(2, new Error("Filesystem checkpoint is unavailable for turn 2 in thread thread-1.")),
     ).toBe(false);
-    expect(retry(2, new Error("Something else failed."))).toBe(true);
-    expect(retry(3, new Error("Something else failed."))).toBe(false);
   });
 
-  it("backs off longer for checkpoint-not-ready errors", () => {
+  it("uses a short generic retry delay", () => {
     const options = checkpointDiffQueryOptions({
       threadId,
       fromTurnCount: 1,
@@ -148,14 +146,8 @@ describe("checkpointDiffQueryOptions", () => {
       throw new Error("Expected retryDelay to be a function.");
     }
 
-    const checkpointDelay = retryDelay(
-      4,
-      new Error("Checkpoint turn count 2 exceeds current turn count 1."),
-    );
-    const genericDelay = retryDelay(4, new Error("Network failure"));
-
-    expect(typeof checkpointDelay).toBe("number");
-    expect(typeof genericDelay).toBe("number");
-    expect((checkpointDelay ?? 0) > (genericDelay ?? 0)).toBe(true);
+    expect(retryDelay(1, new Error("Network failure"))).toBe(100);
+    expect(retryDelay(2, new Error("Network failure"))).toBe(200);
+    expect(retryDelay(4, new Error("Network failure"))).toBe(400);
   });
 });

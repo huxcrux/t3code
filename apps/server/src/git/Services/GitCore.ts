@@ -13,6 +13,7 @@ import type {
   GitCreateBranchInput,
   GitCreateWorktreeInput,
   GitCreateWorktreeResult,
+  GitDiffResult,
   GitInitInput,
   GitListBranchesInput,
   GitListBranchesResult,
@@ -60,6 +61,11 @@ export interface GitRenameBranchResult {
  * GitCoreShape - Service API for low-level Git repository interactions.
  */
 export interface GitCoreShape {
+  /**
+   * Read a unified diff for the current working tree against HEAD.
+   */
+  readonly diffWorkingTree: (cwd: string) => Effect.Effect<GitDiffResult, GitCommandError>;
+
   /**
    * Read Git status for a repository.
    */

@@ -1,8 +1,4 @@
-import {
-  OrchestrationGetFullThreadDiffInput,
-  OrchestrationGetTurnDiffInput,
-  ThreadId,
-} from "@t3tools/contracts";
+import { OrchestrationGetFullThreadDiffInput, OrchestrationGetTurnDiffInput, ThreadId } from "@t3tools/contracts";
 import { queryOptions } from "@tanstack/react-query";
 import { Option, Schema } from "effect";
 import { ensureNativeApi } from "../nativeApi";
@@ -79,16 +75,6 @@ function normalizeCheckpointErrorMessage(error: unknown): string {
 
   return message;
 }
-
-function isCheckpointTemporarilyUnavailable(error: unknown): boolean {
-  const message = asCheckpointErrorMessage(error).toLowerCase();
-  return (
-    message.includes("exceeds current turn count") ||
-    message.includes("checkpoint is unavailable for turn") ||
-    message.includes("filesystem checkpoint is unavailable")
-  );
-}
-
 export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
   const decodedRequest = decodeCheckpointDiffRequest(input);
 
@@ -110,15 +96,7 @@ export function checkpointDiffQueryOptions(input: CheckpointDiffQueryInput) {
     },
     enabled: (input.enabled ?? true) && !!input.threadId && decodedRequest._tag === "Some",
     staleTime: Infinity,
-    retry: (failureCount, error) => {
-      if (isCheckpointTemporarilyUnavailable(error)) {
-        return failureCount < 12;
-      }
-      return failureCount < 3;
-    },
-    retryDelay: (attempt, error) =>
-      isCheckpointTemporarilyUnavailable(error)
-        ? Math.min(5_000, 250 * 2 ** (attempt - 1))
-        : Math.min(1_000, 100 * 2 ** (attempt - 1)),
+    retry: (failureCount) => failureCount < 2,
+    retryDelay: (attempt) => Math.min(400, 100 * 2 ** (attempt - 1)),
   });
 }

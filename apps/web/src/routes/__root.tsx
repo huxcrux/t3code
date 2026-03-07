@@ -22,6 +22,7 @@ import { preferredTerminalEditor } from "../terminal-links";
 import { terminalRunningSubprocessFromEvent } from "../terminalActivity";
 import { onServerConfigUpdated, onServerWelcome } from "../wsNativeApi";
 import { providerQueryKeys } from "../lib/providerReactQuery";
+import { gitQueryKeys } from "../lib/gitReactQuery";
 import { collectActiveTerminalThreadIds } from "../lib/terminalStateCleanup";
 
 export const Route = createRootRouteWithContext<{
@@ -152,6 +153,7 @@ function EventRouter() {
     let syncing = false;
     let pending = false;
     let needsProviderInvalidation = false;
+    let needsGitInvalidation = false;
 
     const flushSnapshotSync = async (): Promise<void> => {
       const snapshot = await api.orchestration.getSnapshot();
@@ -193,6 +195,10 @@ function EventRouter() {
           needsProviderInvalidation = false;
           void queryClient.invalidateQueries({ queryKey: providerQueryKeys.all });
         }
+        if (needsGitInvalidation) {
+          needsGitInvalidation = false;
+          void queryClient.invalidateQueries({ queryKey: gitQueryKeys.all });
+        }
         void syncSnapshot();
       },
       {
@@ -209,6 +215,7 @@ function EventRouter() {
       latestSequence = event.sequence;
       if (event.type === "thread.turn-diff-completed" || event.type === "thread.reverted") {
         needsProviderInvalidation = true;
+        needsGitInvalidation = true;
       }
       domainEventFlushThrottler.maybeExecute();
     });
@@ -296,6 +303,7 @@ function EventRouter() {
     return () => {
       disposed = true;
       needsProviderInvalidation = false;
+      needsGitInvalidation = false;
       domainEventFlushThrottler.cancel();
       unsubDomainEvent();
       unsubTerminalEvent();

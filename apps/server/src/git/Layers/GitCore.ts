@@ -3,6 +3,7 @@ import { Cache, Data, Duration, Effect, Exit, FileSystem, Layer, Path } from "ef
 import { GitCommandError } from "../Errors.ts";
 import { GitService } from "../Services/GitService.ts";
 import { GitCore, type GitCoreShape } from "../Services/GitCore.ts";
+import { EMPTY_GIT_TREE_OID, withTemporarySnapshotTree } from "../TemporaryIndexSnapshot.ts";
 
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
@@ -245,6 +246,20 @@ const makeGitCore = Effect.gen(function* () {
   ): Effect.Effect<string, GitCommandError> =>
     executeGit(operation, cwd, args, { allowNonZeroExit }).pipe(
       Effect.map((result) => result.stdout),
+    );
+
+  const resolveHeadCommit = (cwd: string): Effect.Effect<string | null, GitCommandError> =>
+    executeGit("GitCore.resolveHeadCommit", cwd, ["rev-parse", "--verify", "--quiet", "HEAD"], {
+      allowNonZeroExit: true,
+      timeoutMs: 5_000,
+    }).pipe(
+      Effect.map((result) => {
+        if (result.code !== 0) {
+          return null;
+        }
+        const commit = result.stdout.trim();
+        return commit.length > 0 ? commit : null;
+      }),
     );
 
   const branchExists = (cwd: string, branch: string): Effect.Effect<boolean, GitCommandError> =>
@@ -621,6 +636,52 @@ const makeGitCore = Effect.gen(function* () {
         aheadCount,
         behindCount,
       };
+    });
+
+  const diffWorkingTree: GitCoreShape["diffWorkingTree"] = (cwd) =>
+    Effect.gen(function* () {
+      const operation = "GitCore.diffWorkingTree";
+      const headCommitOid = yield* resolveHeadCommit(cwd);
+
+      return yield* withTemporarySnapshotTree(
+        {
+          operation,
+          cwd,
+          gitExecute: git.execute,
+          fileSystem,
+          path,
+          baseCommitOid: headCommitOid,
+        },
+        (treeOid) =>
+          executeGit(
+            operation,
+            cwd,
+            [
+              "diff",
+              "--patch",
+              "--minimal",
+              "--no-color",
+              headCommitOid ?? EMPTY_GIT_TREE_OID,
+              treeOid,
+            ],
+            {
+              fallbackErrorMessage: "Failed to read working tree diff.",
+            },
+          ).pipe(Effect.map((result) => ({ diff: result.stdout }))),
+      ).pipe(
+        Effect.catchTags({
+          PlatformError: (error) =>
+            Effect.fail(
+              createGitCommandError(
+                operation,
+                cwd,
+                ["diff", "--patch", "--minimal", "--no-color"],
+                "Failed to read working tree diff.",
+                error,
+              ),
+            ),
+        }),
+      );
     });
 
   const status: GitCoreShape["status"] = (input) =>
@@ -1187,6 +1248,7 @@ const makeGitCore = Effect.gen(function* () {
     );
 
   return {
+    diffWorkingTree,
     status,
     statusDetails,
     prepareCommitContext,

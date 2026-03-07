@@ -394,7 +394,9 @@ describe("WebSocket Server", () => {
       providerHealth?: ProviderHealthShape;
       open?: OpenShape;
       gitManager?: GitManagerShape;
-      gitCore?: Pick<GitCoreShape, "listBranches" | "initRepo" | "pullCurrentBranch">;
+      gitCore?: Partial<
+        Pick<GitCoreShape, "diffWorkingTree" | "listBranches" | "initRepo" | "pullCurrentBranch">
+      >;
       terminalManager?: TerminalManagerShape;
     } = {},
   ): Promise<Http.Server> {
@@ -1654,6 +1656,40 @@ describe("WebSocket Server", () => {
     expect(response.error).toBeUndefined();
     expect(response.result).toEqual(statusResult);
     expect(status).toHaveBeenCalledWith({ cwd: "/test" });
+  });
+
+  it("supports git.diff over websocket", async () => {
+    const diffResult = { diff: "diff --git a/README.md b/README.md\n" };
+    const diffWorkingTree = vi.fn(() => Effect.succeed(diffResult));
+
+    server = await createTestServer({
+      cwd: "/test",
+      gitCore: {
+        diffWorkingTree,
+        listBranches: vi.fn(() => Effect.succeed({ branches: [], isRepo: false })),
+        initRepo: vi.fn(() => Effect.void),
+        pullCurrentBranch: vi.fn(() =>
+          Effect.succeed({
+            status: "skipped_up_to_date" as const,
+            branch: "main",
+            upstreamBranch: null,
+          }),
+        ),
+      },
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const ws = await connectWs(port);
+    connections.push(ws);
+    await waitForMessage(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.gitDiff, {
+      cwd: "/test",
+    });
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual(diffResult);
+    expect(diffWorkingTree).toHaveBeenCalledWith("/test");
   });
 
   it("returns errors from git.runStackedAction", async () => {
