@@ -28,6 +28,10 @@ fi
 echo "==> Using hux-fork worktree: $HUX_WORKTREE"
 cd "$HUX_WORKTREE"
 
+echo "==> Cleaning up any in-progress git state..."
+git cherry-pick --abort 2>/dev/null || true
+git merge --abort 2>/dev/null || true
+
 echo "==> Fetching origin..."
 git fetch origin
 
