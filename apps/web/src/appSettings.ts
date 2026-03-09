@@ -1,6 +1,6 @@
 import { useCallback } from "react";
 import { Option, Schema } from "effect";
-import { type ProviderKind, type ProviderServiceTier } from "@t3tools/contracts";
+import { type ProviderKind } from "@t3tools/contracts";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { useLocalStorage } from "./hooks/useLocalStorage";
 
@@ -94,7 +94,9 @@ export interface AppModelOption {
   isCustom: boolean;
 }
 
-export function resolveAppServiceTier(serviceTier: AppServiceTier): ProviderServiceTier | null {
+export function resolveAppServiceTier(
+  serviceTier: AppServiceTier,
+): Exclude<AppServiceTier, "auto"> | null {
   return serviceTier === "auto" ? null : serviceTier;
 }
 
