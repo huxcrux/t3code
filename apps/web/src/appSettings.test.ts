@@ -5,6 +5,8 @@ import {
   getAppModelOptions,
   getSlashModelOptions,
   NEW_THREAD_ENV_MODE_OPTIONS,
+  NEW_THREAD_INTERACTION_MODE_OPTIONS,
+  NEW_THREAD_RUNTIME_MODE_OPTIONS,
   NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS,
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
@@ -40,6 +42,8 @@ describe("getAppSettingsSnapshot", () => {
       confirmThreadDelete: false,
       enableAssistantStreaming: true,
       defaultNewThreadEnvMode: "local",
+      defaultNewThreadRuntimeMode: "full-access",
+      defaultNewThreadInteractionMode: "default",
       defaultNewWorktreeBaseBranchMode: "current",
     });
   });
@@ -50,6 +54,20 @@ describe("new-thread settings options", () => {
     expect(NEW_THREAD_ENV_MODE_OPTIONS.map((option) => option.value)).toEqual([
       "local",
       "worktree",
+    ]);
+  });
+
+  it("exposes the supported runtime defaults", () => {
+    expect(NEW_THREAD_RUNTIME_MODE_OPTIONS.map((option) => option.value)).toEqual([
+      "full-access",
+      "approval-required",
+    ]);
+  });
+
+  it("exposes the supported interaction defaults", () => {
+    expect(NEW_THREAD_INTERACTION_MODE_OPTIONS.map((option) => option.value)).toEqual([
+      "default",
+      "plan",
     ]);
   });
 

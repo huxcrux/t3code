@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   resolveFreshDraftEnvMode,
+  resolveFreshDraftInteractionMode,
+  resolveFreshDraftRuntimeMode,
   resolveImplicitWorktreeBaseBranch,
 } from "./threadDefaults";
 
@@ -12,6 +14,28 @@ describe("resolveFreshDraftEnvMode", () => {
 
   it("supports fresh drafts defaulting to worktree mode", () => {
     expect(resolveFreshDraftEnvMode("worktree")).toBe("worktree");
+  });
+});
+
+describe("resolveFreshDraftRuntimeMode", () => {
+  it("defaults fresh drafts to full access mode", () => {
+    expect(resolveFreshDraftRuntimeMode("full-access")).toBe("full-access");
+    expect(resolveFreshDraftRuntimeMode(undefined)).toBe("full-access");
+  });
+
+  it("supports fresh drafts defaulting to supervised mode", () => {
+    expect(resolveFreshDraftRuntimeMode("approval-required")).toBe("approval-required");
+  });
+});
+
+describe("resolveFreshDraftInteractionMode", () => {
+  it("defaults fresh drafts to chat mode", () => {
+    expect(resolveFreshDraftInteractionMode("default")).toBe("default");
+    expect(resolveFreshDraftInteractionMode(undefined)).toBe("default");
+  });
+
+  it("supports fresh drafts defaulting to plan mode", () => {
+    expect(resolveFreshDraftInteractionMode("plan")).toBe("plan");
   });
 });
 

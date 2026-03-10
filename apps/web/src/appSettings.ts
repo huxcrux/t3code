@@ -1,13 +1,23 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { Option, Schema } from "effect";
-import { type ProviderKind } from "@t3tools/contracts";
+import {
+  DEFAULT_PROVIDER_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
+  ProviderInteractionMode,
+  RuntimeMode,
+  type ProviderKind,
+} from "@t3tools/contracts";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import {
   DEFAULT_NEW_THREAD_ENV_MODE_VALUES,
   DEFAULT_NEW_WORKTREE_BASE_BRANCH_MODE_VALUES,
+  NEW_THREAD_INTERACTION_MODE_OPTIONS,
   type DefaultNewThreadEnvMode,
+  type DefaultNewThreadInteractionMode,
+  type DefaultNewThreadRuntimeMode,
   type DefaultNewWorktreeBaseBranchMode,
   NEW_THREAD_ENV_MODE_OPTIONS,
+  NEW_THREAD_RUNTIME_MODE_OPTIONS,
   NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS,
 } from "./lib/threadDefaults";
 
@@ -36,6 +46,12 @@ const AppSettingsSchema = Schema.Struct({
   defaultNewThreadEnvMode: DefaultNewThreadEnvModeSchema.pipe(
     Schema.withConstructorDefault(() => Option.some("local")),
   ),
+  defaultNewThreadRuntimeMode: RuntimeMode.pipe(
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_RUNTIME_MODE)),
+  ),
+  defaultNewThreadInteractionMode: ProviderInteractionMode.pipe(
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_PROVIDER_INTERACTION_MODE)),
+  ),
   defaultNewWorktreeBaseBranchMode: DefaultNewWorktreeBaseBranchModeSchema.pipe(
     Schema.withConstructorDefault(() => Option.some("current")),
   ),
@@ -49,8 +65,18 @@ export interface AppModelOption {
   name: string;
   isCustom: boolean;
 }
-export type { DefaultNewThreadEnvMode, DefaultNewWorktreeBaseBranchMode };
-export { NEW_THREAD_ENV_MODE_OPTIONS, NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS };
+export type {
+  DefaultNewThreadEnvMode,
+  DefaultNewThreadInteractionMode,
+  DefaultNewThreadRuntimeMode,
+  DefaultNewWorktreeBaseBranchMode,
+};
+export {
+  NEW_THREAD_ENV_MODE_OPTIONS,
+  NEW_THREAD_INTERACTION_MODE_OPTIONS,
+  NEW_THREAD_RUNTIME_MODE_OPTIONS,
+  NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS,
+};
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
 

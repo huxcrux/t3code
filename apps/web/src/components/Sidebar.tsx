@@ -27,7 +27,6 @@ import { SortableContext, useSortable, verticalListSortingStrategy } from "@dnd-
 import { restrictToParentElement, restrictToVerticalAxis } from "@dnd-kit/modifiers";
 import { CSS } from "@dnd-kit/utilities";
 import {
-  DEFAULT_RUNTIME_MODE,
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
   ProjectId,
@@ -40,7 +39,11 @@ import { useLocation, useNavigate, useParams } from "@tanstack/react-router";
 import { useAppSettings } from "../appSettings";
 import { isElectron } from "../env";
 import { APP_STAGE_LABEL } from "../branding";
-import { resolveFreshDraftEnvMode } from "../lib/threadDefaults";
+import {
+  resolveFreshDraftEnvMode,
+  resolveFreshDraftInteractionMode,
+  resolveFreshDraftRuntimeMode,
+} from "../lib/threadDefaults";
 import { newCommandId, newProjectId, newThreadId } from "../lib/utils";
 import { useStore } from "../store";
 import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } from "../keybindings";
@@ -442,12 +445,19 @@ export default function Sidebar() {
       const createdAt = new Date().toISOString();
       return (async () => {
         const nextDefaultEnvMode = resolveFreshDraftEnvMode(appSettings.defaultNewThreadEnvMode);
+        const nextDefaultRuntimeMode = resolveFreshDraftRuntimeMode(
+          appSettings.defaultNewThreadRuntimeMode,
+        );
+        const nextDefaultInteractionMode = resolveFreshDraftInteractionMode(
+          appSettings.defaultNewThreadInteractionMode,
+        );
         setProjectDraftThreadId(projectId, threadId, {
           createdAt,
           branch: options?.branch ?? null,
           worktreePath: options?.worktreePath ?? null,
           envMode: options?.envMode ?? nextDefaultEnvMode,
-          runtimeMode: DEFAULT_RUNTIME_MODE,
+          runtimeMode: nextDefaultRuntimeMode,
+          interactionMode: nextDefaultInteractionMode,
         });
 
         await navigate({
@@ -465,6 +475,8 @@ export default function Sidebar() {
       setDraftThreadContext,
       setProjectDraftThreadId,
       appSettings.defaultNewThreadEnvMode,
+      appSettings.defaultNewThreadInteractionMode,
+      appSettings.defaultNewThreadRuntimeMode,
     ],
   );
 

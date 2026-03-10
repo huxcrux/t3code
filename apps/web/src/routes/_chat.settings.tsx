@@ -7,6 +7,8 @@ import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import {
   MAX_CUSTOM_MODEL_LENGTH,
   NEW_THREAD_ENV_MODE_OPTIONS,
+  NEW_THREAD_INTERACTION_MODE_OPTIONS,
+  NEW_THREAD_RUNTIME_MODE_OPTIONS,
   NEW_WORKTREE_BASE_BRANCH_MODE_OPTIONS,
   useAppSettings,
 } from "../appSettings";
@@ -103,6 +105,8 @@ function SettingsRouteView() {
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
   const defaultNewThreadEnvMode = settings.defaultNewThreadEnvMode;
+  const defaultNewThreadRuntimeMode = settings.defaultNewThreadRuntimeMode;
+  const defaultNewThreadInteractionMode = settings.defaultNewThreadInteractionMode;
   const defaultNewWorktreeBaseBranchMode = settings.defaultNewWorktreeBaseBranchMode;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
 
@@ -342,6 +346,70 @@ function SettingsRouteView() {
                 </label>
 
                 <label className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">Default access mode</span>
+                  <Select
+                    items={NEW_THREAD_RUNTIME_MODE_OPTIONS.map((option) => ({
+                      label: option.label,
+                      value: option.value,
+                    }))}
+                    value={defaultNewThreadRuntimeMode}
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      updateSettings({ defaultNewThreadRuntimeMode: value });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      {NEW_THREAD_RUNTIME_MODE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">
+                    {NEW_THREAD_RUNTIME_MODE_OPTIONS.find(
+                      (option) => option.value === defaultNewThreadRuntimeMode,
+                    )?.description ?? "Start standard new threads with direct workspace access."}
+                  </span>
+                </label>
+
+                <label className="block space-y-1">
+                  <span className="text-xs font-medium text-foreground">
+                    Default interaction mode
+                  </span>
+                  <Select
+                    items={NEW_THREAD_INTERACTION_MODE_OPTIONS.map((option) => ({
+                      label: option.label,
+                      value: option.value,
+                    }))}
+                    value={defaultNewThreadInteractionMode}
+                    onValueChange={(value) => {
+                      if (!value) return;
+                      updateSettings({ defaultNewThreadInteractionMode: value });
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup alignItemWithTrigger={false}>
+                      {NEW_THREAD_INTERACTION_MODE_OPTIONS.map((option) => (
+                        <SelectItem key={option.value} value={option.value}>
+                          {option.label}
+                        </SelectItem>
+                      ))}
+                    </SelectPopup>
+                  </Select>
+                  <span className="text-xs text-muted-foreground">
+                    {NEW_THREAD_INTERACTION_MODE_OPTIONS.find(
+                      (option) => option.value === defaultNewThreadInteractionMode,
+                    )?.description ?? "Start standard new threads in normal execution mode."}
+                  </span>
+                </label>
+
+                <label className="block space-y-1">
                   <span className="text-xs font-medium text-foreground">
                     Initial base branch for new worktrees
                   </span>
@@ -376,6 +444,8 @@ function SettingsRouteView() {
                 </label>
 
                 {(defaultNewThreadEnvMode !== defaults.defaultNewThreadEnvMode ||
+                  defaultNewThreadRuntimeMode !== defaults.defaultNewThreadRuntimeMode ||
+                  defaultNewThreadInteractionMode !== defaults.defaultNewThreadInteractionMode ||
                   defaultNewWorktreeBaseBranchMode !== defaults.defaultNewWorktreeBaseBranchMode) && (
                   <div className="flex justify-end">
                     <Button
@@ -384,6 +454,9 @@ function SettingsRouteView() {
                       onClick={() =>
                         updateSettings({
                           defaultNewThreadEnvMode: defaults.defaultNewThreadEnvMode,
+                          defaultNewThreadRuntimeMode: defaults.defaultNewThreadRuntimeMode,
+                          defaultNewThreadInteractionMode:
+                            defaults.defaultNewThreadInteractionMode,
                           defaultNewWorktreeBaseBranchMode:
                             defaults.defaultNewWorktreeBaseBranchMode,
                         })
