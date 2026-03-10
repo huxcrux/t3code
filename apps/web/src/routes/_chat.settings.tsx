@@ -7,8 +7,8 @@ import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { ZapIcon } from "lucide-react";
 
 import {
-  APP_NOTIFICATION_SCOPE_OPTIONS,
   APP_SERVICE_TIER_OPTIONS,
+  type AppNotificationScope,
   MAX_CUSTOM_MODEL_LENGTH,
   shouldShowFastTierIcon,
   useAppSettings,
@@ -48,6 +48,29 @@ const THEME_OPTIONS = [
     description: "Always use the dark theme.",
   },
 ] as const;
+
+const NOTIFICATION_SCOPE_OPTIONS: Array<{
+  value: AppNotificationScope;
+  label: string;
+  description: string;
+}> = [
+  {
+    value: "background",
+    label: "App not active",
+    description: "Notify only when the app is not the focused program or the browser tab is hidden.",
+  },
+  {
+    value: "non-selected-thread",
+    label: "Non-selected thread",
+    description:
+      "Notify for threads you are not currently viewing, and still notify for the selected thread when the app is in the background.",
+  },
+  {
+    value: "always",
+    label: "Always",
+    description: "Notify even when the current thread is selected and the app is focused.",
+  },
+];
 
 const MODEL_PROVIDER_SETTINGS: Array<{
   provider: ProviderKind;
@@ -712,7 +735,7 @@ function SettingsRouteView() {
                 <label className="block space-y-1">
                   <span className="text-xs font-medium text-foreground">Notify when</span>
                   <Select
-                    items={APP_NOTIFICATION_SCOPE_OPTIONS.map((option) => ({
+                    items={NOTIFICATION_SCOPE_OPTIONS.map((option) => ({
                       label: option.label,
                       value: option.value,
                     }))}
@@ -726,7 +749,7 @@ function SettingsRouteView() {
                       <SelectValue />
                     </SelectTrigger>
                     <SelectPopup alignItemWithTrigger={false}>
-                      {APP_NOTIFICATION_SCOPE_OPTIONS.map((option) => (
+                      {NOTIFICATION_SCOPE_OPTIONS.map((option) => (
                         <SelectItem key={option.value} value={option.value}>
                           {option.label}
                         </SelectItem>

@@ -29,25 +29,7 @@ export const APP_SERVICE_TIER_OPTIONS = [
 ] as const;
 export type AppServiceTier = (typeof APP_SERVICE_TIER_OPTIONS)[number]["value"];
 const AppServiceTierSchema = Schema.Literals(["auto", "fast", "flex"]);
-export const APP_NOTIFICATION_SCOPE_OPTIONS = [
-  {
-    value: "background",
-    label: "App not active",
-    description: "Notify only when the app is not the focused program or the browser tab is hidden.",
-  },
-  {
-    value: "non-selected-thread",
-    label: "Non-selected thread",
-    description:
-      "Notify for threads you are not currently viewing, and still notify for the selected thread when the app is in the background.",
-  },
-  {
-    value: "always",
-    label: "Always",
-    description: "Notify even when the current thread is selected and the app is focused.",
-  },
-] as const;
-export type AppNotificationScope = (typeof APP_NOTIFICATION_SCOPE_OPTIONS)[number]["value"];
+export type AppNotificationScope = "background" | "non-selected-thread" | "always";
 const AppNotificationScopeSchema = Schema.Literals([
   "background",
   "non-selected-thread",
