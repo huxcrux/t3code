@@ -570,6 +570,7 @@ async function mountChatView(options: {
   viewport: ViewportSpec;
   snapshot: OrchestrationReadModel;
   configureFixture?: (fixture: TestFixture) => void;
+  initialEntry?: string;
 }): Promise<MountedChatView> {
   fixture = buildFixture(options.snapshot);
   options.configureFixture?.(fixture);
@@ -587,7 +588,7 @@ async function mountChatView(options: {
 
   const router = getRouter(
     createMemoryHistory({
-      initialEntries: [`/${THREAD_ID}`],
+      initialEntries: [options.initialEntry ?? `/${THREAD_ID}`],
     }),
   );
 
@@ -667,6 +668,33 @@ describe("ChatView timeline estimator parity (full app)", () => {
 
   afterEach(() => {
     document.body.innerHTML = "";
+  });
+
+  it("keeps the composer settings toggle visible without scrolling", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-target-settings-toggle" as MessageId,
+        targetText: "settings route",
+      }),
+      initialEntry: "/settings",
+    });
+
+    try {
+      const composerToggle = await waitForElement(
+        () =>
+          document.querySelector<HTMLElement>(
+            '[role="switch"][aria-label="Auto-switch to plan mode from keyword"]',
+          ),
+        "Unable to find the composer settings toggle.",
+      );
+      const bounds = composerToggle.getBoundingClientRect();
+
+      expect(bounds.top).toBeGreaterThanOrEqual(0);
+      expect(bounds.bottom).toBeLessThanOrEqual(window.innerHeight);
+    } finally {
+      await mounted.cleanup();
+    }
   });
 
   it.each(TEXT_VIEWPORT_MATRIX)(
