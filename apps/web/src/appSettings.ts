@@ -77,6 +77,10 @@ function normalizeAppSettings(settings: AppSettings): AppSettings {
   };
 }
 
+function decodeAppSettings(value: unknown): AppSettings {
+  return normalizeAppSettings(Schema.decodeUnknownSync(AppSettingsSchema)(value));
+}
+
 export function getAppModelOptions(
   provider: ProviderKind,
   customModels: readonly string[],
@@ -177,7 +181,15 @@ function parsePersistedSettings(value: string | null): AppSettings {
   }
 
   try {
-    return normalizeAppSettings(Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema))(value));
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return DEFAULT_APP_SETTINGS;
+    }
+
+    return decodeAppSettings({
+      ...DEFAULT_APP_SETTINGS,
+      ...parsed,
+    });
   } catch {
     return DEFAULT_APP_SETTINGS;
   }
@@ -238,12 +250,10 @@ export function useAppSettings() {
   );
 
   const updateSettings = useCallback((patch: Partial<AppSettings>) => {
-    const next = normalizeAppSettings(
-      Schema.decodeSync(AppSettingsSchema)({
-        ...getAppSettingsSnapshot(),
-        ...patch,
-      }),
-    );
+    const next = decodeAppSettings({
+      ...getAppSettingsSnapshot(),
+      ...patch,
+    });
     persistSettings(next);
     emitChange();
   }, []);
