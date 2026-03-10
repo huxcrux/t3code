@@ -10,6 +10,7 @@ import { DEVELOPMENT_ICON_OVERRIDES, PUBLISH_ICON_OVERRIDES } from "../../../scr
 import { resolveCatalogDependencies } from "../../../scripts/lib/resolve-catalog.ts";
 import rootPackageJson from "../../../package.json" with { type: "json" };
 import serverPackageJson from "../package.json" with { type: "json" };
+import { getWebBundleBuildReason } from "./webBundle.ts";
 
 class CliError extends Data.TaggedError("CliError")<{
   readonly message: string;
@@ -30,6 +31,37 @@ const runCommand = Effect.fn("runCommand")(function* (command: ChildProcess.Comm
       message: `Command exited with non-zero exit code (${exitCode})`,
     });
   }
+});
+
+const ensureFreshWebBundle = Effect.fn("ensureFreshWebBundle")(function* (
+  repoRoot: string,
+  verbose: boolean,
+) {
+  const path = yield* Path.Path;
+  const webDir = path.join(repoRoot, "apps/web");
+  const buildReason = yield* Effect.tryPromise({
+    try: () => getWebBundleBuildReason(webDir),
+    catch: (cause) =>
+      new CliError({
+        message: "Unable to inspect web build inputs",
+        cause,
+      }),
+  });
+
+  if (!buildReason) {
+    yield* Effect.log("[cli] Reusing fresh apps/web/dist");
+    return;
+  }
+
+  yield* Effect.log(`[cli] Building web client because ${buildReason}`);
+  yield* runCommand(
+    ChildProcess.make({
+      cwd: webDir,
+      stdout: verbose ? "inherit" : "ignore",
+      stderr: "inherit",
+      shell: process.platform === "win32",
+    })`bun run build`,
+  );
 });
 
 interface PublishIconBackup {
@@ -137,16 +169,20 @@ const buildCmd = Command.make(
         })`bun tsdown`,
       );
 
+      yield* ensureFreshWebBundle(repoRoot, config.verbose);
+
       const webDist = path.join(repoRoot, "apps/web/dist");
       const clientTarget = path.join(serverDir, "dist/client");
 
-      if (yield* fs.exists(webDist)) {
-        yield* fs.copy(webDist, clientTarget);
-        yield* applyDevelopmentIconOverrides(repoRoot, serverDir);
-        yield* Effect.log("[cli] Bundled web app into dist/client");
+      if (yield* fs.exists(clientTarget)) {
+        yield* fs.remove(clientTarget, { recursive: true, force: true });
       } else {
-        yield* Effect.logWarning("[cli] Web dist not found — skipping client bundle.");
+        yield* fs.makeDirectory(path.join(serverDir, "dist"), { recursive: true });
       }
+
+      yield* fs.copy(webDist, clientTarget);
+      yield* applyDevelopmentIconOverrides(repoRoot, serverDir);
+      yield* Effect.log("[cli] Bundled web app into dist/client");
     }),
 ).pipe(Command.withDescription("Build the server package (tsdown + bundle web client)."));
 
