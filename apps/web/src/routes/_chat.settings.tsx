@@ -210,86 +210,79 @@ function SettingsRouteView() {
               <div className="mb-4">
                 <h2 className="text-sm font-medium text-foreground">Appearance</h2>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  Choose how T3 Code handles light and dark mode.
+                  Choose how T3 Code looks across the app.
                 </p>
               </div>
 
-              <div className="space-y-2" role="radiogroup" aria-label="Theme preference">
-                {THEME_OPTIONS.map((option) => {
-                  const selected = theme === option.value;
-                  return (
-                    <button
-                      key={option.value}
-                      type="button"
-                      role="radio"
-                      aria-checked={selected}
-                      className={`flex w-full items-start justify-between rounded-lg border px-3 py-2 text-left transition-colors ${
-                        selected
-                          ? "border-primary/60 bg-primary/8 text-foreground"
-                          : "border-border bg-background text-muted-foreground hover:bg-accent"
-                      }`}
-                      onClick={() => setTheme(option.value)}
-                    >
-                      <span className="flex flex-col">
-                        <span className="text-sm font-medium">{option.label}</span>
-                        <span className="text-xs">{option.description}</span>
-                      </span>
-                      {selected ? (
-                        <span className="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
-                          Selected
+              <div className="space-y-4">
+                <div className="space-y-2" role="radiogroup" aria-label="Theme preference">
+                  {THEME_OPTIONS.map((option) => {
+                    const selected = theme === option.value;
+                    return (
+                      <button
+                        key={option.value}
+                        type="button"
+                        role="radio"
+                        aria-checked={selected}
+                        className={`flex w-full items-start justify-between rounded-lg border px-3 py-2 text-left transition-colors ${
+                          selected
+                            ? "border-primary/60 bg-primary/8 text-foreground"
+                            : "border-border bg-background text-muted-foreground hover:bg-accent"
+                        }`}
+                        onClick={() => setTheme(option.value)}
+                      >
+                        <span className="flex flex-col">
+                          <span className="text-sm font-medium">{option.label}</span>
+                          <span className="text-xs">{option.description}</span>
                         </span>
-                      ) : null}
-                    </button>
-                  );
-                })}
-              </div>
-
-              <p className="mt-4 text-xs text-muted-foreground">
-                Active theme: <span className="font-medium text-foreground">{resolvedTheme}</span>
-              </p>
-            </section>
-
-            <section className="rounded-2xl border border-border bg-card p-5">
-              <div className="mb-4">
-                <h2 className="text-sm font-medium text-foreground">Time</h2>
-                <p className="mt-1 text-xs text-muted-foreground">
-                  Control how timestamps are shown across chat history and diffs.
-                </p>
-              </div>
-
-              <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
-                <div>
-                  <p className="text-sm font-medium text-foreground">Use 24-hour timestamps</p>
-                  <p className="text-xs text-muted-foreground">
-                    Show times like <code>13:42:09</code> instead of <code>1:42:09 PM</code>.
-                  </p>
+                        {selected ? (
+                          <span className="rounded bg-primary/14 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-primary">
+                            Selected
+                          </span>
+                        ) : null}
+                      </button>
+                    );
+                  })}
                 </div>
-                <Switch
-                  checked={settings.use24HourTimestamps}
-                  onCheckedChange={(checked) =>
-                    updateSettings({
-                      use24HourTimestamps: Boolean(checked),
-                    })
-                  }
-                  aria-label="Use 24-hour timestamps"
-                />
-              </div>
 
-              {settings.use24HourTimestamps !== defaults.use24HourTimestamps ? (
-                <div className="mt-3 flex justify-end">
-                  <Button
-                    size="xs"
-                    variant="outline"
-                    onClick={() =>
+                <p className="text-xs text-muted-foreground">
+                  Active theme: <span className="font-medium text-foreground">{resolvedTheme}</span>
+                </p>
+
+                <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
+                  <div>
+                    <p className="text-sm font-medium text-foreground">Use 24-hour timestamps</p>
+                    <p className="text-xs text-muted-foreground">
+                      Show times like <code>13:42:09</code> instead of <code>1:42:09 PM</code>.
+                    </p>
+                  </div>
+                  <Switch
+                    checked={settings.use24HourTimestamps}
+                    onCheckedChange={(checked) =>
                       updateSettings({
-                        use24HourTimestamps: defaults.use24HourTimestamps,
+                        use24HourTimestamps: Boolean(checked),
                       })
                     }
-                  >
-                    Restore default
-                  </Button>
+                    aria-label="Use 24-hour timestamps"
+                  />
                 </div>
-              ) : null}
+
+                {settings.use24HourTimestamps !== defaults.use24HourTimestamps ? (
+                  <div className="flex justify-end">
+                    <Button
+                      size="xs"
+                      variant="outline"
+                      onClick={() =>
+                        updateSettings({
+                          use24HourTimestamps: defaults.use24HourTimestamps,
+                        })
+                      }
+                    >
+                      Restore default
+                    </Button>
+                  </div>
+                ) : null}
+              </div>
             </section>
 
             <section className="rounded-2xl border border-border bg-card p-5">
