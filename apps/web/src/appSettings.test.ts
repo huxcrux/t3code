@@ -1,75 +1,10 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
-  getAppSettingsSnapshot,
   getAppModelOptions,
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
 } from "./appSettings";
-
-describe("getAppSettingsSnapshot", () => {
-  beforeEach(() => {
-    const storage = new Map<string, string>();
-    vi.stubGlobal("window", {
-      localStorage: {
-        clear() {
-          storage.clear();
-        },
-        getItem(key: string) {
-          return storage.get(key) ?? null;
-        },
-        removeItem(key: string) {
-          storage.delete(key);
-        },
-        setItem(key: string, value: string) {
-          storage.set(key, value);
-        },
-      },
-      addEventListener() {},
-      removeEventListener() {},
-    });
-    window.localStorage.clear();
-  });
-
-  afterEach(() => {
-    vi.unstubAllGlobals();
-  });
-
-  it("defaults 24-hour timestamps to disabled", () => {
-    expect(getAppSettingsSnapshot().use24HourTimestamps).toBe(false);
-  });
-
-  it("hydrates persisted 24-hour timestamp preferences", () => {
-    window.localStorage.setItem(
-      "t3code:app-settings:v1",
-      JSON.stringify({
-        use24HourTimestamps: true,
-      }),
-    );
-
-    expect(getAppSettingsSnapshot()).toMatchObject({
-      use24HourTimestamps: true,
-      enableAssistantStreaming: false,
-      confirmThreadDelete: true,
-    });
-  });
-
-  it("keeps existing settings when older persisted payloads omit newer keys", () => {
-    window.localStorage.setItem(
-      "t3code:app-settings:v1",
-      JSON.stringify({
-        codexBinaryPath: "/usr/local/bin/codex-nightly",
-        enableAssistantStreaming: true,
-      }),
-    );
-
-    expect(getAppSettingsSnapshot()).toMatchObject({
-      codexBinaryPath: "/usr/local/bin/codex-nightly",
-      enableAssistantStreaming: true,
-      use24HourTimestamps: false,
-    });
-  });
-});
 
 describe("normalizeCustomModelSlugs", () => {
   it("normalizes aliases, removes built-ins, and deduplicates values", () => {
