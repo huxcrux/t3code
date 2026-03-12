@@ -1,4 +1,5 @@
 import { memo, useState, useCallback, useRef, useEffect } from "react";
+import { type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
 import { ScrollArea } from "./ui/scroll-area";
@@ -53,7 +54,7 @@ interface PlanSidebarProps {
   activeProposedPlan: LatestProposedPlanState | null;
   markdownCwd: string | undefined;
   workspaceRoot: string | undefined;
-  use24HourTimestamps: boolean;
+  timestampFormat: TimestampFormat;
   onClose: () => void;
 }
 
@@ -62,7 +63,7 @@ const PlanSidebar = memo(function PlanSidebar({
   activeProposedPlan,
   markdownCwd,
   workspaceRoot,
-  use24HourTimestamps,
+  timestampFormat,
   onClose,
 }: PlanSidebarProps) {
   const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
@@ -147,7 +148,7 @@ const PlanSidebar = memo(function PlanSidebar({
           </Badge>
           {activePlan ? (
             <span className="text-[11px] text-muted-foreground/60">
-              {formatTimestamp(activePlan.createdAt, use24HourTimestamps)}
+              {formatTimestamp(activePlan.createdAt, timestampFormat)}
             </span>
           ) : null}
         </div>

@@ -184,7 +184,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const setStoreThreadError = useStore((store) => store.setError);
   const setStoreThreadBranch = useStore((store) => store.setThreadBranch);
   const { settings } = useAppSettings();
-  const use24HourTimestamps = settings.use24HourTimestamps;
+  const timestampFormat = settings.timestampFormat;
   const navigate = useNavigate();
   const rawSearch = useSearch({
     strict: false,
@@ -3245,7 +3245,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
               onImageExpand={onExpandTimelineImage}
               markdownCwd={gitCwd ?? undefined}
               resolvedTheme={resolvedTheme}
-              use24HourTimestamps={use24HourTimestamps}
+              timestampFormat={timestampFormat}
               workspaceRoot={activeProject?.cwd ?? undefined}
             />
           </div>
@@ -3766,7 +3766,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
             activeProposedPlan={activeProposedPlan}
             markdownCwd={gitCwd ?? undefined}
             workspaceRoot={activeProject?.cwd ?? undefined}
-            use24HourTimestamps={use24HourTimestamps}
+            timestampFormat={timestampFormat}
             onClose={() => {
               setPlanSidebarOpen(false);
               // Track that the user explicitly dismissed for this turn so auto-open won't fight them.

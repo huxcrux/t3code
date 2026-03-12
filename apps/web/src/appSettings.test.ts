@@ -4,6 +4,7 @@ import {
   getAppModelOptions,
   normalizeCustomModelSlugs,
   resolveAppModelSelection,
+  resolveLegacyTimestampFormat,
 } from "./appSettings";
 
 describe("normalizeCustomModelSlugs", () => {
@@ -55,5 +56,24 @@ describe("resolveAppModelSelection", () => {
 
   it("falls back to the provider default when no model is selected", () => {
     expect(resolveAppModelSelection("codex", [], "")).toBe("gpt-5.4");
+  });
+});
+
+describe("resolveLegacyTimestampFormat", () => {
+  it("migrates legacy enabled booleans to 24-hour format", () => {
+    expect(resolveLegacyTimestampFormat({ use24HourTimestamps: true })).toBe("24-hour");
+  });
+
+  it("migrates legacy disabled booleans to 12-hour format", () => {
+    expect(resolveLegacyTimestampFormat({ use24HourTimestamps: false })).toBe("12-hour");
+  });
+
+  it("ignores legacy booleans when the new format is already present", () => {
+    expect(
+      resolveLegacyTimestampFormat({
+        timestampFormat: "24-hour",
+        use24HourTimestamps: false,
+      }),
+    ).toBeNull();
   });
 });

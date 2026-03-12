@@ -20,6 +20,7 @@ import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
 import { computeMessageDurationStart } from "./MessagesTimeline.logic";
+import { type TimestampFormat } from "../../appSettings";
 import { formatTimestamp } from "../../timestampFormat";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
@@ -45,7 +46,7 @@ interface MessagesTimelineProps {
   onImageExpand: (preview: ExpandedImagePreview) => void;
   markdownCwd: string | undefined;
   resolvedTheme: "light" | "dark";
-  use24HourTimestamps: boolean;
+  timestampFormat: TimestampFormat;
   workspaceRoot: string | undefined;
 }
 
@@ -69,7 +70,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   onImageExpand,
   markdownCwd,
   resolvedTheme,
-  use24HourTimestamps,
+  timestampFormat,
   workspaceRoot,
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
@@ -427,7 +428,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     )}
                   </div>
                   <p className="text-right text-[10px] text-muted-foreground/30">
-                    {formatTimestamp(row.message.createdAt, use24HourTimestamps)}
+                    {formatTimestamp(row.message.createdAt, timestampFormat)}
                   </p>
                 </div>
               </div>
@@ -518,7 +519,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                     row.message.streaming
                       ? formatElapsed(row.durationStart, nowIso)
                       : formatElapsed(row.durationStart, row.message.completedAt),
-                    use24HourTimestamps,
+                    timestampFormat,
                   )}
                 </p>
               </div>
@@ -657,10 +658,10 @@ function formatWorkingTimer(startIso: string, endIso: string): string | null {
 function formatMessageMeta(
   createdAt: string,
   duration: string | null,
-  use24HourTimestamps: boolean,
+  timestampFormat: TimestampFormat,
 ): string {
-  if (!duration) return formatTimestamp(createdAt, use24HourTimestamps);
-  return `${formatTimestamp(createdAt, use24HourTimestamps)} • ${duration}`;
+  if (!duration) return formatTimestamp(createdAt, timestampFormat);
+  return `${formatTimestamp(createdAt, timestampFormat)} • ${duration}`;
 }
 
 function workToneClass(tone: "thinking" | "tool" | "info" | "error"): string {

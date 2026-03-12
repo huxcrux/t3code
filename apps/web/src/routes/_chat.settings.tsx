@@ -11,6 +11,13 @@ import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { ensureNativeApi } from "../nativeApi";
 import { Button } from "../components/ui/button";
 import { Input } from "../components/ui/input";
+import {
+  Select,
+  SelectItem,
+  SelectPopup,
+  SelectTrigger,
+  SelectValue,
+} from "../components/ui/select";
 import { Switch } from "../components/ui/switch";
 import { APP_VERSION } from "../branding";
 import { SidebarInset } from "~/components/ui/sidebar";
@@ -251,30 +258,39 @@ function SettingsRouteView() {
 
                 <div className="flex items-center justify-between rounded-lg border border-border bg-background px-3 py-2">
                   <div>
-                    <p className="text-sm font-medium text-foreground">Use 24-hour timestamps</p>
+                    <p className="text-sm font-medium text-foreground">Timestamp format</p>
                     <p className="text-xs text-muted-foreground">
-                      Show times like <code>13:42:09</code> instead of <code>1:42:09 PM</code>.
+                      Choose whether times render like <code>1:42:09 PM</code> or{" "}
+                      <code>13:42:09</code>.
                     </p>
                   </div>
-                  <Switch
-                    checked={settings.use24HourTimestamps}
-                    onCheckedChange={(checked) =>
+                  <Select
+                    value={settings.timestampFormat}
+                    onValueChange={(value) => {
+                      if (value !== "12-hour" && value !== "24-hour") return;
                       updateSettings({
-                        use24HourTimestamps: Boolean(checked),
-                      })
-                    }
-                    aria-label="Use 24-hour timestamps"
-                  />
+                        timestampFormat: value,
+                      });
+                    }}
+                  >
+                    <SelectTrigger className="w-36" aria-label="Timestamp format">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectPopup align="end">
+                      <SelectItem value="12-hour">12-hour</SelectItem>
+                      <SelectItem value="24-hour">24-hour</SelectItem>
+                    </SelectPopup>
+                  </Select>
                 </div>
 
-                {settings.use24HourTimestamps !== defaults.use24HourTimestamps ? (
+                {settings.timestampFormat !== defaults.timestampFormat ? (
                   <div className="flex justify-end">
                     <Button
                       size="xs"
                       variant="outline"
                       onClick={() =>
                         updateSettings({
-                          use24HourTimestamps: defaults.use24HourTimestamps,
+                          timestampFormat: defaults.timestampFormat,
                         })
                       }
                     >

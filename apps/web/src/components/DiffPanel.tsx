@@ -483,7 +483,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                       "?"}
                   </span>
                   <span className="text-[9px] leading-tight opacity-70">
-                    {formatShortTimestamp(summary.completedAt, settings.use24HourTimestamps)}
+                    {formatShortTimestamp(summary.completedAt, settings.timestampFormat)}
                   </span>
                 </div>
               </div>
