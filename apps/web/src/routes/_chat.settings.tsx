@@ -3,7 +3,6 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { ZapIcon } from "lucide-react";
 
 import {
