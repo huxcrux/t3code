@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { estimateTimelineMessageHeight } from "./timelineHeight";
+import { estimateTimelineMessageHeight, estimateTimelineWorkGroupHeight } from "./timelineHeight";
 
 describe("estimateTimelineMessageHeight", () => {
   it("uses assistant sizing rules for assistant messages", () => {
@@ -28,7 +28,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }],
       }),
-    ).toBe(346);
+    ).toBe(323);
 
     expect(
       estimateTimelineMessageHeight({
@@ -36,7 +36,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }],
       }),
-    ).toBe(346);
+    ).toBe(323);
   });
 
   it("adds a second attachment row for three or four user attachments", () => {
@@ -46,7 +46,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }, { id: "3" }],
       }),
-    ).toBe(574);
+    ).toBe(551);
 
     expect(
       estimateTimelineMessageHeight({
@@ -54,7 +54,7 @@ describe("estimateTimelineMessageHeight", () => {
         text: "hello",
         attachments: [{ id: "1" }, { id: "2" }, { id: "3" }, { id: "4" }],
       }),
-    ).toBe(574);
+    ).toBe(551);
   });
 
   it("does not cap long user message estimates", () => {
@@ -63,7 +63,7 @@ describe("estimateTimelineMessageHeight", () => {
         role: "user",
         text: "a".repeat(56 * 120),
       }),
-    ).toBe(2736);
+    ).toBe(2735);
   });
 
   it("counts explicit newlines for user message estimates", () => {
@@ -72,7 +72,7 @@ describe("estimateTimelineMessageHeight", () => {
         role: "user",
         text: "first\nsecond\nthird",
       }),
-    ).toBe(162);
+    ).toBe(139);
   });
 
   it("uses narrower width to increase user line wrapping", () => {
@@ -81,8 +81,8 @@ describe("estimateTimelineMessageHeight", () => {
       text: "a".repeat(52),
     };
 
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(140);
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(118);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(117);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(95);
   });
 
   it("does not clamp user wrapping too aggressively on very narrow layouts", () => {
@@ -91,8 +91,8 @@ describe("estimateTimelineMessageHeight", () => {
       text: "a".repeat(20),
     };
 
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 100 })).toBe(184);
-    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(118);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 100 })).toBe(161);
+    expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(95);
   });
 
   it("uses narrower width to increase assistant line wrapping", () => {
@@ -103,5 +103,77 @@ describe("estimateTimelineMessageHeight", () => {
 
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(188);
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(122);
+  });
+
+  it("adds markdown block spacing for structured assistant responses", () => {
+    const markdownMessage = {
+      role: "assistant" as const,
+      text: "# Heading\n\nParagraph one.\n\n- item one\n- item two\n\n> quoted line",
+    };
+    const plainMessage = {
+      role: "assistant" as const,
+      text: "Heading Paragraph one. item one item two quoted line",
+    };
+
+    expect(
+      estimateTimelineMessageHeight(markdownMessage, { timelineWidthPx: 768 }),
+    ).toBeGreaterThan(estimateTimelineMessageHeight(plainMessage, { timelineWidthPx: 768 }));
+  });
+
+  it("adds extra height for assistant fenced code blocks", () => {
+    const codeMessage = {
+      role: "assistant" as const,
+      text: "```ts\nconst value = 1;\nconst next = value + 1;\n```",
+    };
+
+    expect(estimateTimelineMessageHeight(codeMessage, { timelineWidthPx: 768 })).toBe(160);
+  });
+});
+
+describe("estimateTimelineWorkGroupHeight", () => {
+  it("accounts for visible entries, header chrome, and row spacing", () => {
+    expect(
+      estimateTimelineWorkGroupHeight(
+        Array.from({ length: 6 }, (_, index) => ({
+          tone: "tool" as const,
+          command: `command-${index}`,
+        })),
+        { maxVisibleEntries: 6 },
+      ),
+    ).toBe(208);
+  });
+
+  it("uses the collapsed visible-entry limit and header when the group overflows", () => {
+    expect(
+      estimateTimelineWorkGroupHeight(
+        Array.from({ length: 8 }, (_, index) => ({
+          tone: "tool" as const,
+          command: `command-${index}`,
+        })),
+        { maxVisibleEntries: 6, expanded: false },
+      ),
+    ).toBe(236);
+  });
+
+  it("accounts for wrapped changed-file chips based on width", () => {
+    const groupedEntries = [
+      {
+        tone: "info" as const,
+        detail: "Updated files",
+        changedFiles: ["a.ts", "b.ts", "c.ts", "d.ts"],
+      },
+    ];
+
+    expect(
+      estimateTimelineWorkGroupHeight(groupedEntries, {
+        timelineWidthPx: 320,
+      }),
+    ).toBe(178);
+
+    expect(
+      estimateTimelineWorkGroupHeight(groupedEntries, {
+        timelineWidthPx: 768,
+      }),
+    ).toBe(112);
   });
 });

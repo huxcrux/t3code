@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 
-import { buildTurnDiffTree, summarizeTurnDiffStats } from "./turnDiffTree";
+import {
+  buildTurnDiffTree,
+  countVisibleTurnDiffTreeNodes,
+  summarizeTurnDiffStats,
+} from "./turnDiffTree";
 
 describe("summarizeTurnDiffStats", () => {
   it("sums only files with numeric additions/deletions", () => {
@@ -164,5 +168,27 @@ describe("buildTurnDiffTree", () => {
     );
     expect(directoryNodes.map((node) => node.name).toSorted()).toEqual([" a", "a"]);
     expect(directoryNodes.map((node) => node.path).toSorted()).toEqual([" a", "a"]);
+  });
+});
+
+describe("countVisibleTurnDiffTreeNodes", () => {
+  it("counts only top-level nodes when directories are collapsed", () => {
+    const tree = buildTurnDiffTree([
+      { path: "apps/web/src/index.ts", additions: 2, deletions: 1 },
+      { path: "apps/web/src/App.tsx", additions: 4, deletions: 2 },
+      { path: "README.md", additions: 1, deletions: 0 },
+    ]);
+
+    expect(countVisibleTurnDiffTreeNodes(tree, false)).toBe(2);
+  });
+
+  it("counts nested directory and file rows when directories are expanded", () => {
+    const tree = buildTurnDiffTree([
+      { path: "apps/web/src/index.ts", additions: 2, deletions: 1 },
+      { path: "apps/web/src/App.tsx", additions: 4, deletions: 2 },
+      { path: "README.md", additions: 1, deletions: 0 },
+    ]);
+
+    expect(countVisibleTurnDiffTreeNodes(tree, true)).toBe(5);
   });
 });

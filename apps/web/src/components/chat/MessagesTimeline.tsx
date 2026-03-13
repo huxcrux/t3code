@@ -1,14 +1,20 @@
 import { type MessageId, type TurnId } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
+  defaultRangeExtractor,
   measureElement as measureVirtualElement,
+  type Range,
   type VirtualItem,
   useVirtualizer,
 } from "@tanstack/react-virtual";
 import { deriveTimelineEntries, formatElapsed } from "../../session-logic";
 import { AUTO_SCROLL_BOTTOM_THRESHOLD_PX } from "../../chat-scroll";
 import { type TurnDiffSummary } from "../../types";
-import { summarizeTurnDiffStats } from "../../lib/turnDiffTree";
+import {
+  buildTurnDiffTree,
+  countVisibleTurnDiffTreeNodes,
+  summarizeTurnDiffStats,
+} from "../../lib/turnDiffTree";
 import ChatMarkdown from "../ChatMarkdown";
 import {
   BotIcon,
@@ -26,7 +32,7 @@ import {
 } from "lucide-react";
 import { Button } from "../ui/button";
 import { clamp } from "effect/Number";
-import { estimateTimelineMessageHeight } from "../timelineHeight";
+import { estimateTimelineMessageHeight, estimateTimelineWorkGroupHeight } from "../timelineHeight";
 import { buildExpandedImagePreview, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
@@ -39,6 +45,9 @@ import { formatTimestamp } from "../../timestampFormat";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
+const TIMELINE_BASE_OVERSCAN_ROWS = 8;
+const TIMELINE_BACKWARD_EXTRA_OVERSCAN_ROWS = 48;
+const MIN_ROWS_TO_ENABLE_VIRTUALIZATION = 120;
 
 interface MessagesTimelineProps {
   hasMessages: boolean;
@@ -218,38 +227,94 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     return Math.min(firstCurrentTurnRowIndex, firstTailRowIndex);
   }, [activeTurnInProgress, activeTurnStartedAt, rows]);
 
-  const virtualizedRowCount = clamp(firstUnvirtualizedRowIndex, {
-    minimum: 0,
-    maximum: rows.length,
-  });
+  const shouldVirtualizeRows = rows.length > MIN_ROWS_TO_ENABLE_VIRTUALIZATION;
+  const virtualizedRowCount = shouldVirtualizeRows
+    ? clamp(firstUnvirtualizedRowIndex, {
+        minimum: 0,
+        maximum: rows.length,
+      })
+    : 0;
+  const [allDirectoriesExpandedByTurnId, setAllDirectoriesExpandedByTurnId] = useState<
+    Record<string, boolean>
+  >({});
+  const onToggleAllDirectories = useCallback((turnId: TurnId) => {
+    setAllDirectoriesExpandedByTurnId((current) => ({
+      ...current,
+      [turnId]: !(current[turnId] ?? true),
+    }));
+  }, []);
+  const scrollDirectionRef = useRef<"forward" | "backward" | null>(null);
+  const rangeExtractor = useCallback((range: Range) => {
+    if (scrollDirectionRef.current !== "backward") {
+      return defaultRangeExtractor(range);
+    }
+
+    const startIndex = Math.max(
+      0,
+      range.startIndex - range.overscan - TIMELINE_BACKWARD_EXTRA_OVERSCAN_ROWS,
+    );
+    const endIndex = Math.min(range.count - 1, range.endIndex + range.overscan);
+    const indexes: number[] = [];
+    for (let index = startIndex; index <= endIndex; index += 1) {
+      indexes.push(index);
+    }
+    return indexes;
+  }, []);
 
   const rowVirtualizer = useVirtualizer({
     count: virtualizedRowCount,
     getScrollElement: () => scrollContainer,
+    onChange: (instance) => {
+      scrollDirectionRef.current = instance.scrollDirection;
+    },
     // Use stable row ids so virtual measurements do not leak across thread switches.
     getItemKey: (index: number) => rows[index]?.id ?? index,
+    rangeExtractor,
     estimateSize: (index: number) => {
       const row = rows[index];
       if (!row) return 96;
-      if (row.kind === "work") return 112;
+      if (row.kind === "work") {
+        return estimateTimelineWorkGroupHeight(row.groupedEntries, {
+          expanded: expandedWorkGroups[row.id] ?? false,
+          maxVisibleEntries: MAX_VISIBLE_WORK_LOG_ENTRIES,
+          timelineWidthPx,
+        });
+      }
       if (row.kind === "proposed-plan") return estimateTimelineProposedPlanHeight(row.proposedPlan);
       if (row.kind === "working") return 40;
-      return estimateTimelineMessageHeight(row.message, { timelineWidthPx });
+      const turnDiffSummary = turnDiffSummaryByAssistantMessageId.get(row.message.id);
+      return estimateTimelineRowHeight(row, {
+        timelineWidthPx,
+        turnDiffSummary,
+        allDirectoriesExpanded:
+          row.message.role === "assistant" && turnDiffSummary
+            ? (allDirectoriesExpandedByTurnId[turnDiffSummary.turnId] ?? true)
+            : true,
+      });
     },
     measureElement: measureVirtualElement,
     useAnimationFrameWithResizeObserver: true,
-    overscan: 8,
+    overscan: TIMELINE_BASE_OVERSCAN_ROWS,
   });
   useEffect(() => {
     if (timelineWidthPx === null) return;
     rowVirtualizer.measure();
   }, [rowVirtualizer, timelineWidthPx]);
   useEffect(() => {
+    rowVirtualizer.measure();
+  }, [
+    allDirectoriesExpandedByTurnId,
+    expandedWorkGroups,
+    rowVirtualizer,
+    rows,
+    turnDiffSummaryByAssistantMessageId,
+  ]);
+  useEffect(() => {
     rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = (_item, _delta, instance) => {
       const viewportHeight = instance.scrollRect?.height ?? 0;
       const scrollOffset = instance.scrollOffset ?? 0;
       const remainingDistance = instance.getTotalSize() - (scrollOffset + viewportHeight);
-      return remainingDistance > AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
+      return remainingDistance <= AUTO_SCROLL_BOTTOM_THRESHOLD_PX;
     };
     return () => {
       rowVirtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
@@ -274,15 +339,6 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 
   const virtualRows = rowVirtualizer.getVirtualItems();
   const nonVirtualizedRows = rows.slice(virtualizedRowCount);
-  const [allDirectoriesExpandedByTurnId, setAllDirectoriesExpandedByTurnId] = useState<
-    Record<string, boolean>
-  >({});
-  const onToggleAllDirectories = useCallback((turnId: TurnId) => {
-    setAllDirectoriesExpandedByTurnId((current) => ({
-      ...current,
-      [turnId]: !(current[turnId] ?? true),
-    }));
-  }, []);
 
   const renderRowContent = (row: TimelineRow) => (
     <div
@@ -602,6 +658,54 @@ type TimelineRow =
 function estimateTimelineProposedPlanHeight(proposedPlan: TimelineProposedPlan): number {
   const estimatedLines = Math.max(1, Math.ceil(proposedPlan.planMarkdown.length / 72));
   return 120 + Math.min(estimatedLines * 22, 880);
+}
+
+function estimateTimelineRowHeight(
+  row: Extract<TimelineRow, { kind: "message" }>,
+  layout: {
+    timelineWidthPx: number | null;
+    turnDiffSummary: TurnDiffSummary | undefined;
+    allDirectoriesExpanded: boolean;
+  },
+): number {
+  let height = estimateTimelineMessageHeight(row.message, {
+    timelineWidthPx: layout.timelineWidthPx,
+  });
+  if (row.message.role !== "assistant") {
+    return height;
+  }
+
+  if (row.showCompletionDivider) {
+    height += 40;
+  }
+  if (layout.turnDiffSummary && layout.turnDiffSummary.files.length > 0) {
+    height += estimateChangedFilesSummaryHeight(
+      layout.turnDiffSummary.files,
+      layout.allDirectoriesExpanded,
+    );
+  }
+  return height;
+}
+
+function estimateChangedFilesSummaryHeight(
+  files: ReadonlyArray<TurnDiffSummary["files"][number]>,
+  allDirectoriesExpanded: boolean,
+): number {
+  const summaryChromeHeightPx = 64;
+  const rowHeightPx = 22;
+  const rowGapPx = 2;
+  if (files.length <= 0) {
+    return 0;
+  }
+  const visibleRowCount = countVisibleTurnDiffTreeNodes(
+    buildTurnDiffTree(files),
+    allDirectoriesExpanded,
+  );
+  return (
+    summaryChromeHeightPx +
+    visibleRowCount * rowHeightPx +
+    Math.max(visibleRowCount - 1, 0) * rowGapPx
+  );
 }
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {

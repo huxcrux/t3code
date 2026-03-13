@@ -170,3 +170,17 @@ export function buildTurnDiffTree(files: ReadonlyArray<TurnDiffFileChange>): Tur
 
   return toTreeNodes(root);
 }
+
+export function countVisibleTurnDiffTreeNodes(
+  nodes: ReadonlyArray<TurnDiffTreeNode>,
+  allDirectoriesExpanded: boolean,
+): number {
+  let visibleNodeCount = 0;
+  for (const node of nodes) {
+    visibleNodeCount += 1;
+    if (node.kind === "directory" && allDirectoriesExpanded) {
+      visibleNodeCount += countVisibleTurnDiffTreeNodes(node.children, allDirectoriesExpanded);
+    }
+  }
+  return visibleNodeCount;
+}
