@@ -1,9 +1,7 @@
 import { type MessageId, type TurnId } from "@t3tools/contracts";
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  defaultRangeExtractor,
   measureElement as measureVirtualElement,
-  type Range,
   type VirtualItem,
   useVirtualizer,
 } from "@tanstack/react-virtual";
@@ -46,7 +44,6 @@ import { formatTimestamp } from "../../timestampFormat";
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
 const TIMELINE_BASE_OVERSCAN_ROWS = 8;
-const TIMELINE_BACKWARD_EXTRA_OVERSCAN_ROWS = 48;
 const MIN_ROWS_TO_ENABLE_VIRTUALIZATION = 120;
 
 interface MessagesTimelineProps {
@@ -243,33 +240,12 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       [turnId]: !(current[turnId] ?? true),
     }));
   }, []);
-  const scrollDirectionRef = useRef<"forward" | "backward" | null>(null);
-  const rangeExtractor = useCallback((range: Range) => {
-    if (scrollDirectionRef.current !== "backward") {
-      return defaultRangeExtractor(range);
-    }
-
-    const startIndex = Math.max(
-      0,
-      range.startIndex - range.overscan - TIMELINE_BACKWARD_EXTRA_OVERSCAN_ROWS,
-    );
-    const endIndex = Math.min(range.count - 1, range.endIndex + range.overscan);
-    const indexes: number[] = [];
-    for (let index = startIndex; index <= endIndex; index += 1) {
-      indexes.push(index);
-    }
-    return indexes;
-  }, []);
 
   const rowVirtualizer = useVirtualizer({
     count: virtualizedRowCount,
     getScrollElement: () => scrollContainer,
-    onChange: (instance) => {
-      scrollDirectionRef.current = instance.scrollDirection;
-    },
     // Use stable row ids so virtual measurements do not leak across thread switches.
     getItemKey: (index: number) => rows[index]?.id ?? index,
-    rangeExtractor,
     estimateSize: (index: number) => {
       const row = rows[index];
       if (!row) return 96;

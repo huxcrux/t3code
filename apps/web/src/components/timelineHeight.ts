@@ -14,12 +14,6 @@ const ASSISTANT_AVG_CHAR_WIDTH_PX = 7.2;
 const MIN_USER_CHARS_PER_LINE = 4;
 const MIN_ASSISTANT_CHARS_PER_LINE = 20;
 const USER_LONG_WRAP_BIAS_THRESHOLD_LINES = 40;
-const MARKDOWN_BLOCK_GAP_PX = 10;
-const MARKDOWN_CODE_BLOCK_BASE_HEIGHT_PX = 44;
-const MARKDOWN_CODE_LINE_HEIGHT_PX = 19;
-const MARKDOWN_HEADING_LINE_HEIGHT_PX = 28;
-const MARKDOWN_LIST_ITEM_GAP_PX = 4;
-const MARKDOWN_TABLE_ROW_HEIGHT_PX = 26;
 const WORK_GROUP_ROW_BOTTOM_PADDING_PX = 16;
 const WORK_GROUP_CARD_VERTICAL_PADDING_PX = 14;
 const WORK_GROUP_HEADER_HEIGHT_PX = 20;
@@ -71,10 +65,6 @@ function estimateWrappedLineCount(text: string, charsPerLine: number): number {
 
   lines += Math.max(1, Math.ceil(currentLineLength / charsPerLine));
   return lines;
-}
-
-function estimateWrappedLinesForTexts(texts: ReadonlyArray<string>, charsPerLine: number): number {
-  return texts.reduce((total, text) => total + estimateWrappedLineCount(text, charsPerLine), 0);
 }
 
 function isFinitePositiveNumber(value: number | null | undefined): value is number {
@@ -148,164 +138,15 @@ function estimateWorkEntryHeight(
   return height;
 }
 
-function isMarkdownHeading(line: string): boolean {
-  return /^#{1,6}\s+/.test(line);
-}
-
-function isMarkdownListItem(line: string): boolean {
-  return /^\s*(?:[-*+]\s+|\d+\.\s+)/.test(line);
-}
-
-function isMarkdownBlockquote(line: string): boolean {
-  return /^\s*>\s?/.test(line);
-}
-
-function isMarkdownTableLine(line: string): boolean {
-  return line.includes("|");
-}
-
-function isMarkdownTableSeparator(line: string): boolean {
-  return /^\s*\|?(?:\s*:?-{3,}:?\s*\|)+\s*:?-{3,}:?\s*\|?\s*$/.test(line);
-}
-
-function hasStructuredMarkdown(text: string): boolean {
-  return /(^|\n)(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+|```|\|)|\n\s*\n/.test(text);
-}
-
-function estimateAssistantMarkdownHeight(text: string, timelineWidthPx: number | null): number {
-  const charsPerLine = estimateCharsPerLineForAssistant(timelineWidthPx);
-  if (!hasStructuredMarkdown(text)) {
-    return ASSISTANT_BASE_HEIGHT_PX + estimateWrappedLineCount(text, charsPerLine) * LINE_HEIGHT_PX;
-  }
-
-  const lines = text.split("\n");
-  let totalHeight = ASSISTANT_BASE_HEIGHT_PX;
-  let lineIndex = 0;
-  let blockCount = 0;
-
-  const startBlock = () => {
-    if (blockCount > 0) {
-      totalHeight += MARKDOWN_BLOCK_GAP_PX;
-    }
-    blockCount += 1;
-  };
-
-  while (lineIndex < lines.length) {
-    const rawLine = lines[lineIndex] ?? "";
-    const trimmedLine = rawLine.trim();
-    if (trimmedLine.length === 0) {
-      lineIndex += 1;
-      continue;
-    }
-
-    if (trimmedLine.startsWith("```")) {
-      startBlock();
-      let codeLineCount = 0;
-      lineIndex += 1;
-      while (lineIndex < lines.length && !(lines[lineIndex] ?? "").trim().startsWith("```")) {
-        codeLineCount += 1;
-        lineIndex += 1;
-      }
-      if (lineIndex < lines.length) {
-        lineIndex += 1;
-      }
-      totalHeight +=
-        MARKDOWN_CODE_BLOCK_BASE_HEIGHT_PX +
-        Math.max(codeLineCount, 1) * MARKDOWN_CODE_LINE_HEIGHT_PX;
-      continue;
-    }
-
-    if (isMarkdownHeading(trimmedLine)) {
-      startBlock();
-      totalHeight +=
-        estimateWrappedLineCount(trimmedLine.replace(/^#{1,6}\s+/, ""), charsPerLine) *
-        MARKDOWN_HEADING_LINE_HEIGHT_PX;
-      lineIndex += 1;
-      continue;
-    }
-
-    if (isMarkdownBlockquote(trimmedLine)) {
-      startBlock();
-      const quoteLines: string[] = [];
-      while (lineIndex < lines.length) {
-        const candidate = lines[lineIndex] ?? "";
-        if (!isMarkdownBlockquote(candidate.trim())) break;
-        quoteLines.push(candidate.replace(/^\s*>\s?/, ""));
-        lineIndex += 1;
-      }
-      totalHeight +=
-        estimateWrappedLinesForTexts(quoteLines, Math.max(charsPerLine - 3, 12)) * LINE_HEIGHT_PX +
-        8;
-      continue;
-    }
-
-    if (
-      isMarkdownTableLine(rawLine) &&
-      lineIndex + 1 < lines.length &&
-      isMarkdownTableSeparator(lines[lineIndex + 1] ?? "")
-    ) {
-      startBlock();
-      let rowCount = 0;
-      while (lineIndex < lines.length) {
-        const candidate = lines[lineIndex] ?? "";
-        if (candidate.trim().length === 0 || !isMarkdownTableLine(candidate)) break;
-        rowCount += 1;
-        lineIndex += 1;
-      }
-      totalHeight += Math.max(rowCount, 2) * MARKDOWN_TABLE_ROW_HEIGHT_PX;
-      continue;
-    }
-
-    if (isMarkdownListItem(trimmedLine)) {
-      startBlock();
-      const listLines: string[] = [];
-      while (lineIndex < lines.length) {
-        const candidate = lines[lineIndex] ?? "";
-        const candidateTrimmed = candidate.trim();
-        if (candidateTrimmed.length === 0) break;
-        if (!isMarkdownListItem(candidateTrimmed) && !/^\s{2,}\S/.test(candidate)) break;
-        listLines.push(candidateTrimmed.replace(/^(?:[-*+]\s+|\d+\.\s+)\s?/, ""));
-        lineIndex += 1;
-      }
-      totalHeight +=
-        estimateWrappedLinesForTexts(listLines, Math.max(charsPerLine - 3, 12)) * LINE_HEIGHT_PX +
-        Math.max(listLines.length - 1, 0) * MARKDOWN_LIST_ITEM_GAP_PX;
-      continue;
-    }
-
-    startBlock();
-    const paragraphLines: string[] = [];
-    while (lineIndex < lines.length) {
-      const candidate = lines[lineIndex] ?? "";
-      const candidateTrimmed = candidate.trim();
-      if (candidateTrimmed.length === 0) break;
-      if (
-        candidateTrimmed.startsWith("```") ||
-        isMarkdownHeading(candidateTrimmed) ||
-        isMarkdownListItem(candidateTrimmed) ||
-        isMarkdownBlockquote(candidateTrimmed) ||
-        (isMarkdownTableLine(candidate) &&
-          lineIndex + 1 < lines.length &&
-          isMarkdownTableSeparator(lines[lineIndex + 1] ?? ""))
-      ) {
-        break;
-      }
-      paragraphLines.push(candidateTrimmed);
-      lineIndex += 1;
-    }
-    totalHeight += estimateWrappedLinesForTexts(paragraphLines, charsPerLine) * LINE_HEIGHT_PX;
-  }
-
-  return totalHeight;
-}
-
 export function estimateTimelineMessageHeight(
   message: TimelineMessageHeightInput,
   layout: TimelineHeightEstimateLayout = { timelineWidthPx: null },
 ): number {
   const timelineWidthPx = layout.timelineWidthPx ?? null;
   if (message.role === "assistant") {
-    return estimateAssistantMarkdownHeight(message.text, timelineWidthPx);
+    const charsPerLine = estimateCharsPerLineForAssistant(timelineWidthPx);
+    const estimatedLines = estimateWrappedLineCount(message.text, charsPerLine);
+    return ASSISTANT_BASE_HEIGHT_PX + estimatedLines * LINE_HEIGHT_PX;
   }
 
   if (message.role === "user") {
@@ -322,7 +163,9 @@ export function estimateTimelineMessageHeight(
 
   // `system` messages are not rendered in the chat timeline, but keep a stable
   // explicit branch in case they are present in timeline data.
-  return estimateAssistantMarkdownHeight(message.text, timelineWidthPx);
+  const charsPerLine = estimateCharsPerLineForAssistant(timelineWidthPx);
+  const estimatedLines = estimateWrappedLineCount(message.text, charsPerLine);
+  return ASSISTANT_BASE_HEIGHT_PX + estimatedLines * LINE_HEIGHT_PX;
 }
 
 export function estimateTimelineWorkGroupHeight(

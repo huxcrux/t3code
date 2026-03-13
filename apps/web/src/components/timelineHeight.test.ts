@@ -104,30 +104,6 @@ describe("estimateTimelineMessageHeight", () => {
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 320 })).toBe(188);
     expect(estimateTimelineMessageHeight(message, { timelineWidthPx: 768 })).toBe(122);
   });
-
-  it("adds markdown block spacing for structured assistant responses", () => {
-    const markdownMessage = {
-      role: "assistant" as const,
-      text: "# Heading\n\nParagraph one.\n\n- item one\n- item two\n\n> quoted line",
-    };
-    const plainMessage = {
-      role: "assistant" as const,
-      text: "Heading Paragraph one. item one item two quoted line",
-    };
-
-    expect(
-      estimateTimelineMessageHeight(markdownMessage, { timelineWidthPx: 768 }),
-    ).toBeGreaterThan(estimateTimelineMessageHeight(plainMessage, { timelineWidthPx: 768 }));
-  });
-
-  it("adds extra height for assistant fenced code blocks", () => {
-    const codeMessage = {
-      role: "assistant" as const,
-      text: "```ts\nconst value = 1;\nconst next = value + 1;\n```",
-    };
-
-    expect(estimateTimelineMessageHeight(codeMessage, { timelineWidthPx: 768 })).toBe(160);
-  });
 });
 
 describe("estimateTimelineWorkGroupHeight", () => {
