@@ -1,10 +1,12 @@
 import type { ThreadId, TurnId } from "@t3tools/contracts";
 
-import type { AppNotificationScope } from "./appSettings";
 import { resolveThreadStatusPill } from "./components/Sidebar.logic";
 import { derivePendingApprovals, derivePendingUserInputs } from "./session-logic";
 import type { ProposedPlan } from "./types";
 import type { Thread } from "./types";
+
+const DEFAULT_COMPLETION_DELAY_MS = 1000;
+const DEFAULT_SEEN_NOTIFICATION_LIMIT = 512;
 
 export type ThreadNotificationKind = "user-input-required" | "completed";
 export interface ThreadNotificationEvent {
@@ -20,6 +22,19 @@ type ThreadCompletionEligibilityInput = Pick<
   Thread,
   "activities" | "interactionMode" | "proposedPlans" | "session" | "latestTurn" | "lastVisitedAt"
 >;
+
+export interface ThreadNotificationController {
+  update(input: {
+    threads: Thread[];
+    threadsHydrated: boolean;
+    supportsNotifications: boolean;
+    notificationPermission: NotificationPermission | "unsupported";
+    isBackground: boolean;
+    getCurrentThread: (threadId: ThreadId) => Thread | undefined;
+    showNotification: (input: { threadId: ThreadId; title: string; body: string }) => void;
+  }): void;
+  dispose(): void;
+}
 
 function toTurnKey(threadId: ThreadId, turnId: TurnId | null): string | null {
   return turnId ? `${threadId}:${turnId}` : null;
@@ -160,23 +175,27 @@ export function deriveThreadNotificationEvent(
   return nextCompletionEvent;
 }
 
-export function shouldNotifyForScope(input: {
-  scope: AppNotificationScope;
-  isBackground: boolean;
-  selectedThreadId: ThreadId | null;
-  threadId: ThreadId;
-}): boolean {
-  switch (input.scope) {
-    case "always":
-      return true;
-    case "non-selected-thread":
-      return input.selectedThreadId === null
-        ? true
-        : input.threadId !== input.selectedThreadId || input.isBackground;
-    case "background":
-    default:
-      return input.isBackground;
+function canEmitCompletionNotification(
+  event: ThreadNotificationEvent,
+  getCurrentThread: (threadId: ThreadId) => Thread | undefined,
+): boolean {
+  const currentThread = getCurrentThread(event.threadId);
+  if (!currentThread) {
+    return false;
   }
+  if (currentThread.latestTurn?.turnId !== event.turnId) {
+    return false;
+  }
+  const currentCompletedAt = currentThread.latestTurn?.completedAt;
+  if (!currentCompletedAt) {
+    return false;
+  }
+  const currentNotificationId = `completed:${currentThread.id}:${event.turnId}:${currentCompletedAt}`;
+  if (currentNotificationId !== event.notificationId) {
+    return false;
+  }
+
+  return isThreadCompletionNotificationEligible(currentThread);
 }
 
 export function buildThreadNotificationCopy(
@@ -200,5 +219,154 @@ export function buildThreadNotificationCopy(
   return {
     title: "User input required",
     body: thread.title,
+  };
+}
+
+export function createThreadNotificationController(options?: {
+  completionDelayMs?: number;
+  seenLimit?: number;
+}): ThreadNotificationController {
+  let initialized = false;
+  let previousThreadById = new Map<ThreadId, Thread>();
+  const seenIds = new Set<string>();
+  const completionDelayMs = options?.completionDelayMs ?? DEFAULT_COMPLETION_DELAY_MS;
+  const seenLimit = options?.seenLimit ?? DEFAULT_SEEN_NOTIFICATION_LIMIT;
+  const pendingCompletionsByTurnKey = new Map<
+    string,
+    { notificationId: string; timeoutId: ReturnType<typeof setTimeout> }
+  >();
+
+  const markSeen = (notificationId: string) => {
+    if (seenIds.has(notificationId)) {
+      return;
+    }
+    seenIds.add(notificationId);
+    if (seenIds.size <= seenLimit) {
+      return;
+    }
+
+    const oldestId = seenIds.values().next().value;
+    if (typeof oldestId === "string") {
+      seenIds.delete(oldestId);
+    }
+  };
+
+  const clearPendingCompletion = (turnKey: string) => {
+    const pending = pendingCompletionsByTurnKey.get(turnKey);
+    if (!pending) {
+      return;
+    }
+    clearTimeout(pending.timeoutId);
+    pendingCompletionsByTurnKey.delete(turnKey);
+  };
+
+  const scheduleEvent = (
+    event: ThreadNotificationEvent,
+    emit: () => void,
+    shouldEmit?: () => boolean,
+  ) => {
+    if (event.priority === "action") {
+      if (event.turnKey) {
+        clearPendingCompletion(event.turnKey);
+      }
+      if (seenIds.has(event.notificationId)) {
+        return;
+      }
+      markSeen(event.notificationId);
+      emit();
+      return;
+    }
+
+    if (seenIds.has(event.notificationId)) {
+      return;
+    }
+
+    if (!event.turnKey) {
+      markSeen(event.notificationId);
+      emit();
+      return;
+    }
+
+    const pending = pendingCompletionsByTurnKey.get(event.turnKey);
+    if (pending) {
+      if (pending.notificationId === event.notificationId) {
+        return;
+      }
+      clearPendingCompletion(event.turnKey);
+    }
+
+    const timeoutId = setTimeout(() => {
+      pendingCompletionsByTurnKey.delete(event.turnKey!);
+      if (seenIds.has(event.notificationId)) {
+        return;
+      }
+      if (shouldEmit && !shouldEmit()) {
+        return;
+      }
+      markSeen(event.notificationId);
+      emit();
+    }, completionDelayMs);
+
+    pendingCompletionsByTurnKey.set(event.turnKey, {
+      notificationId: event.notificationId,
+      timeoutId,
+    });
+  };
+
+  return {
+    update(input) {
+      const nextThreadById = new Map(input.threads.map((thread) => [thread.id, thread] as const));
+      if (!input.threadsHydrated) {
+        previousThreadById = nextThreadById;
+        return;
+      }
+
+      if (!initialized) {
+        initialized = true;
+        previousThreadById = nextThreadById;
+        return;
+      }
+
+      if (
+        !input.supportsNotifications ||
+        input.notificationPermission !== "granted" ||
+        !input.isBackground
+      ) {
+        previousThreadById = nextThreadById;
+        return;
+      }
+
+      for (const thread of input.threads) {
+        const event = deriveThreadNotificationEvent(previousThreadById.get(thread.id), thread);
+        if (!event) {
+          continue;
+        }
+
+        const copy = buildThreadNotificationCopy(thread, event.kind);
+        const emit = () => {
+          input.showNotification({
+            threadId: thread.id,
+            title: copy.title,
+            body: copy.body,
+          });
+        };
+
+        scheduleEvent(
+          event,
+          emit,
+          event.priority === "completion"
+            ? () => canEmitCompletionNotification(event, input.getCurrentThread)
+            : undefined,
+        );
+      }
+
+      previousThreadById = nextThreadById;
+    },
+    dispose() {
+      for (const pending of pendingCompletionsByTurnKey.values()) {
+        clearTimeout(pending.timeoutId);
+      }
+      pendingCompletionsByTurnKey.clear();
+    },
   };
 }

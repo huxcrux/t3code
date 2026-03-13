@@ -1,43 +1,22 @@
-import { ThreadId } from "@t3tools/contracts";
-import { useNavigate, useRouterState } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useEffect, useRef } from "react";
 
-import { useAppSettings } from "../appSettings";
 import { useStore } from "../store";
-import { createThreadNotificationManager } from "../threadNotificationManager";
-
-function selectedThreadIdFromRouterMatches(
-  matches: ReadonlyArray<{ params: Record<string, string> }>,
-): ThreadId | null {
-  for (let index = matches.length - 1; index >= 0; index -= 1) {
-    const match = matches[index];
-    const threadId = match?.params.threadId;
-    if (typeof threadId === "string" && threadId.length > 0) {
-      return ThreadId.makeUnsafe(threadId);
-    }
-  }
-  return null;
-}
+import { createThreadNotificationController } from "../threadNotifications";
 
 export function ThreadNotifications() {
   const navigate = useNavigate();
   const threads = useStore((store) => store.threads);
   const threadsHydrated = useStore((store) => store.threadsHydrated);
-  const { settings } = useAppSettings();
-  const selectedThreadId = useRouterState({
-    select: (state) => selectedThreadIdFromRouterMatches(state.matches as Array<{ params: Record<string, string> }>),
-  });
-  const managerRef = useRef(createThreadNotificationManager());
+  const controllerRef = useRef(createThreadNotificationController());
 
   useEffect(() => {
     const supportsNotifications =
       typeof window !== "undefined" && typeof Notification !== "undefined";
 
-    managerRef.current.update({
+    controllerRef.current.update({
       threads,
       threadsHydrated,
-      settings,
-      selectedThreadId,
       supportsNotifications,
       notificationPermission: supportsNotifications ? Notification.permission : "unsupported",
       isBackground:
@@ -65,18 +44,12 @@ export function ThreadNotifications() {
         }
       },
     });
-  }, [
-    navigate,
-    selectedThreadId,
-    settings,
-    threads,
-    threadsHydrated,
-  ]);
+  }, [navigate, threads, threadsHydrated]);
 
   useEffect(() => {
-    const manager = managerRef.current;
+    const controller = controllerRef.current;
     return () => {
-      manager.dispose();
+      controller.dispose();
     };
   }, []);
 

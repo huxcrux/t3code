@@ -1,10 +1,10 @@
 import { EventId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import {
   buildThreadNotificationCopy,
+  createThreadNotificationController,
   deriveThreadNotificationEvent,
-  shouldNotifyForScope,
 } from "./threadNotifications";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
@@ -32,12 +32,12 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
   };
 }
 
-function makeApprovalRequestedActivity(overrides: Partial<Thread["activities"][number]> = {}) {
+function makeApprovalRequestedActivity() {
   return {
     id: EventId.makeUnsafe("evt-approval-open"),
     createdAt: "2026-03-07T12:00:05.000Z",
     tone: "approval" as const,
-    kind: "approval.requested",
+    kind: "approval.requested" as const,
     summary: "Approval required",
     payload: {
       requestId: "req-approval",
@@ -45,16 +45,15 @@ function makeApprovalRequestedActivity(overrides: Partial<Thread["activities"][n
       detail: "Run command",
     },
     turnId: TurnId.makeUnsafe("turn-1"),
-    ...overrides,
   };
 }
 
-function makeUserInputRequestedActivity(overrides: Partial<Thread["activities"][number]> = {}) {
+function makeUserInputRequestedActivity() {
   return {
     id: EventId.makeUnsafe("evt-user-input-open"),
     createdAt: "2026-03-07T12:00:05.000Z",
     tone: "info" as const,
-    kind: "user-input.requested",
+    kind: "user-input.requested" as const,
     summary: "User input requested",
     payload: {
       requestId: "req-user-input",
@@ -73,18 +72,19 @@ function makeUserInputRequestedActivity(overrides: Partial<Thread["activities"][
       ],
     },
     turnId: TurnId.makeUnsafe("turn-1"),
-    ...overrides,
   };
 }
 
 describe("deriveThreadNotificationEvent", () => {
-  it("emits approval notifications with action priority and turn metadata", () => {
-    const previous = makeThread();
-    const next = makeThread({
-      activities: [makeApprovalRequestedActivity()],
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
+  it("emits approval notifications for pending approvals", () => {
+    expect(
+      deriveThreadNotificationEvent(
+        makeThread(),
+        makeThread({
+          activities: [makeApprovalRequestedActivity()],
+        }),
+      ),
+    ).toEqual({
       kind: "user-input-required",
       notificationId: "approval:req-approval",
       threadId: ThreadId.makeUnsafe("thread-1"),
@@ -94,13 +94,15 @@ describe("deriveThreadNotificationEvent", () => {
     });
   });
 
-  it("emits user-input notifications with action priority and turn metadata", () => {
-    const previous = makeThread();
-    const next = makeThread({
-      activities: [makeUserInputRequestedActivity()],
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
+  it("emits user-input notifications for pending prompts", () => {
+    expect(
+      deriveThreadNotificationEvent(
+        makeThread(),
+        makeThread({
+          activities: [makeUserInputRequestedActivity()],
+        }),
+      ),
+    ).toEqual({
       kind: "user-input-required",
       notificationId: "user-input:req-user-input",
       threadId: ThreadId.makeUnsafe("thread-1"),
@@ -110,7 +112,42 @@ describe("deriveThreadNotificationEvent", () => {
     });
   });
 
-  it("emits completed notifications with completion priority and turn metadata", () => {
+  it("emits plan notifications from existing plan-ready status", () => {
+    expect(
+      deriveThreadNotificationEvent(
+        makeThread(),
+        makeThread({
+          interactionMode: "plan",
+          latestTurn: {
+            turnId: TurnId.makeUnsafe("turn-1"),
+            state: "completed",
+            requestedAt: "2026-03-07T12:00:00.000Z",
+            startedAt: "2026-03-07T12:00:01.000Z",
+            completedAt: "2026-03-07T12:00:05.000Z",
+            assistantMessageId: null,
+          },
+          proposedPlans: [
+            {
+              id: "plan:thread-1:turn:turn-1",
+              turnId: TurnId.makeUnsafe("turn-1"),
+              planMarkdown: "# Ship it",
+              createdAt: "2026-03-07T12:00:04.000Z",
+              updatedAt: "2026-03-07T12:00:04.000Z",
+            },
+          ],
+        }),
+      ),
+    ).toEqual({
+      kind: "user-input-required",
+      notificationId: "plan:plan:thread-1:turn:turn-1:2026-03-07T12:00:04.000Z",
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      turnId: TurnId.makeUnsafe("turn-1"),
+      turnKey: "thread-1:turn-1",
+      priority: "action",
+    });
+  });
+
+  it("emits completion notifications once per completed turn", () => {
     const previous = makeThread({
       latestTurn: {
         turnId: TurnId.makeUnsafe("turn-1"),
@@ -132,288 +169,121 @@ describe("deriveThreadNotificationEvent", () => {
       },
     });
 
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
-      kind: "completed",
-      notificationId: "completed:thread-1:turn-1:2026-03-07T12:00:05.000Z",
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: TurnId.makeUnsafe("turn-1"),
-      turnKey: "thread-1:turn-1",
-      priority: "completion",
-    });
-  });
-
-  it("emits plan notifications with action priority and turn metadata", () => {
-    const previous = makeThread();
-    const next = makeThread({
-      latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-1"),
-        state: "completed",
-        requestedAt: "2026-03-07T12:00:00.000Z",
-        startedAt: "2026-03-07T12:00:01.000Z",
-        completedAt: "2026-03-07T12:00:05.000Z",
-        assistantMessageId: null,
-      },
-      proposedPlans: [
-        {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.makeUnsafe("turn-1"),
-          planMarkdown: "# Ship it",
-          createdAt: "2026-03-07T12:00:04.000Z",
-          updatedAt: "2026-03-07T12:00:04.000Z",
-        },
-      ],
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
-      kind: "user-input-required",
-      notificationId: "plan:plan:thread-1:turn:turn-1:2026-03-07T12:00:04.000Z",
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: TurnId.makeUnsafe("turn-1"),
-      turnKey: "thread-1:turn-1",
-      priority: "action",
-    });
-  });
-
-  it("does not emit completed when the prior snapshot already had the same completion", () => {
-    const previous = makeThread({
-      latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-1"),
-        state: "completed",
-        requestedAt: "2026-03-07T12:00:00.000Z",
-        startedAt: "2026-03-07T12:00:01.000Z",
-        completedAt: "2026-03-07T12:00:05.000Z",
-        assistantMessageId: MessageId.makeUnsafe("assistant-1"),
-      },
-    });
-    const next = makeThread({
-      latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-1"),
-        state: "completed",
-        requestedAt: "2026-03-07T12:00:00.000Z",
-        startedAt: "2026-03-07T12:00:01.000Z",
-        completedAt: "2026-03-07T12:00:05.000Z",
-        assistantMessageId: MessageId.makeUnsafe("assistant-1"),
-      },
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toBeNull();
-  });
-
-  it("does not derive completed when approval is pending", () => {
-    const previous = makeThread();
-    const next = makeThread({
-      latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-1"),
-        state: "completed",
-        requestedAt: "2026-03-07T12:00:00.000Z",
-        startedAt: "2026-03-07T12:00:01.000Z",
-        completedAt: "2026-03-07T12:00:05.000Z",
-        assistantMessageId: null,
-      },
-      activities: [makeApprovalRequestedActivity()],
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
-      kind: "user-input-required",
-      notificationId: "approval:req-approval",
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: TurnId.makeUnsafe("turn-1"),
-      turnKey: "thread-1:turn-1",
-      priority: "action",
-    });
-  });
-
-  it("does not derive completed when user input is pending", () => {
-    const previous = makeThread();
-    const next = makeThread({
-      latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-1"),
-        state: "completed",
-        requestedAt: "2026-03-07T12:00:00.000Z",
-        startedAt: "2026-03-07T12:00:01.000Z",
-        completedAt: "2026-03-07T12:00:05.000Z",
-        assistantMessageId: null,
-      },
-      activities: [makeUserInputRequestedActivity()],
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
-      kind: "user-input-required",
-      notificationId: "user-input:req-user-input",
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: TurnId.makeUnsafe("turn-1"),
-      turnKey: "thread-1:turn-1",
-      priority: "action",
-    });
-  });
-
-  it("does not derive completed when a proposed-plan action is pending", () => {
-    const previous = makeThread();
-    const next = makeThread({
-      latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-1"),
-        state: "completed",
-        requestedAt: "2026-03-07T12:00:00.000Z",
-        startedAt: "2026-03-07T12:00:01.000Z",
-        completedAt: "2026-03-07T12:00:05.000Z",
-        assistantMessageId: null,
-      },
-      proposedPlans: [
-        {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.makeUnsafe("turn-1"),
-          planMarkdown: "# Ship it",
-          createdAt: "2026-03-07T12:00:04.000Z",
-          updatedAt: "2026-03-07T12:00:04.000Z",
-        },
-      ],
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
-      kind: "user-input-required",
-      notificationId: "plan:plan:thread-1:turn:turn-1:2026-03-07T12:00:04.000Z",
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: TurnId.makeUnsafe("turn-1"),
-      turnKey: "thread-1:turn-1",
-      priority: "action",
-    });
-  });
-
-  it("prefers user-action notifications over completion notifications", () => {
-    const previous = makeThread();
-    const next = makeThread({
-      latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-1"),
-        state: "completed",
-        requestedAt: "2026-03-07T12:00:00.000Z",
-        startedAt: "2026-03-07T12:00:01.000Z",
-        completedAt: "2026-03-07T12:00:05.000Z",
-        assistantMessageId: null,
-      },
-      proposedPlans: [
-        {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.makeUnsafe("turn-1"),
-          planMarkdown: "# Ship it",
-          createdAt: "2026-03-07T12:00:04.000Z",
-          updatedAt: "2026-03-07T12:00:04.000Z",
-        },
-      ],
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
-      kind: "user-input-required",
-      notificationId: "plan:plan:thread-1:turn:turn-1:2026-03-07T12:00:04.000Z",
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: TurnId.makeUnsafe("turn-1"),
-      turnKey: "thread-1:turn-1",
-      priority: "action",
-    });
-  });
-
-  it("emits a new notification when the latest plan revision changes", () => {
-    const previous = makeThread({
-      latestTurn: {
-        turnId: TurnId.makeUnsafe("turn-1"),
-        state: "completed",
-        requestedAt: "2026-03-07T12:00:00.000Z",
-        startedAt: "2026-03-07T12:00:01.000Z",
-        completedAt: "2026-03-07T12:00:05.000Z",
-        assistantMessageId: null,
-      },
-      proposedPlans: [
-        {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.makeUnsafe("turn-1"),
-          planMarkdown: "# Ship it",
-          createdAt: "2026-03-07T12:00:04.000Z",
-          updatedAt: "2026-03-07T12:00:04.000Z",
-        },
-      ],
-    });
-    const next = makeThread({
-      latestTurn: previous.latestTurn,
-      proposedPlans: [
-        {
-          id: "plan:thread-1:turn:turn-1",
-          turnId: TurnId.makeUnsafe("turn-1"),
-          planMarkdown: "# Ship it",
-          createdAt: "2026-03-07T12:00:04.000Z",
-          updatedAt: "2026-03-07T12:00:06.000Z",
-        },
-      ],
-    });
-
-    expect(deriveThreadNotificationEvent(previous, next)).toEqual({
-      kind: "user-input-required",
-      notificationId: "plan:plan:thread-1:turn:turn-1:2026-03-07T12:00:06.000Z",
-      threadId: ThreadId.makeUnsafe("thread-1"),
-      turnId: TurnId.makeUnsafe("turn-1"),
-      turnKey: "thread-1:turn-1",
-      priority: "action",
-    });
-  });
-});
-
-describe("shouldNotifyForScope", () => {
-  const selectedThreadId = ThreadId.makeUnsafe("thread-1");
-  const otherThreadId = ThreadId.makeUnsafe("thread-2");
-
-  it("only notifies in background for the default scope", () => {
-    expect(
-      shouldNotifyForScope({
-        scope: "background",
-        isBackground: false,
-        selectedThreadId,
-        threadId: selectedThreadId,
-      }),
-    ).toBe(false);
-    expect(
-      shouldNotifyForScope({
-        scope: "background",
-        isBackground: true,
-        selectedThreadId,
-        threadId: selectedThreadId,
-      }),
-    ).toBe(true);
-  });
-
-  it("notifies for non-selected threads even when the app is active", () => {
-    expect(
-      shouldNotifyForScope({
-        scope: "non-selected-thread",
-        isBackground: false,
-        selectedThreadId,
-        threadId: otherThreadId,
-      }),
-    ).toBe(true);
-    expect(
-      shouldNotifyForScope({
-        scope: "non-selected-thread",
-        isBackground: false,
-        selectedThreadId,
-        threadId: selectedThreadId,
-      }),
-    ).toBe(false);
-  });
-
-  it("always notifies for the always scope", () => {
-    expect(
-      shouldNotifyForScope({
-        scope: "always",
-        isBackground: false,
-        selectedThreadId,
-        threadId: selectedThreadId,
-      }),
-    ).toBe(true);
+    expect(deriveThreadNotificationEvent(previous, next)?.kind).toBe("completed");
+    expect(deriveThreadNotificationEvent(next, next)).toBeNull();
   });
 });
 
 describe("buildThreadNotificationCopy", () => {
-  it("formats completion copy with the thread title in the body", () => {
+  it("uses status-specific notification copy", () => {
+    expect(
+      buildThreadNotificationCopy(
+        makeThread({
+          activities: [makeApprovalRequestedActivity()],
+        }),
+        "user-input-required",
+      ),
+    ).toEqual({
+      title: "Approval required",
+      body: "Thread title",
+    });
+
     expect(buildThreadNotificationCopy(makeThread(), "completed")).toEqual({
       title: "Thread completed",
       body: "Thread title",
     });
+  });
+});
+
+describe("createThreadNotificationController", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("ignores the first hydrated snapshot and then emits action notifications", () => {
+    const controller = createThreadNotificationController();
+    const showNotification = vi.fn();
+    const initialThread = makeThread();
+    const updatedThread = makeThread({
+      activities: [makeApprovalRequestedActivity()],
+    });
+
+    controller.update({
+      threads: [initialThread],
+      threadsHydrated: true,
+      supportsNotifications: true,
+      notificationPermission: "granted",
+      isBackground: true,
+      getCurrentThread: () => initialThread,
+      showNotification,
+    });
+
+    controller.update({
+      threads: [updatedThread],
+      threadsHydrated: true,
+      supportsNotifications: true,
+      notificationPermission: "granted",
+      isBackground: true,
+      getCurrentThread: () => updatedThread,
+      showNotification,
+    });
+
+    expect(showNotification).toHaveBeenCalledWith({
+      threadId: ThreadId.makeUnsafe("thread-1"),
+      title: "Approval required",
+      body: "Thread title",
+    });
+  });
+
+  it("delays completion notifications and drops them when the turn is no longer current", () => {
+    const controller = createThreadNotificationController({ completionDelayMs: 1000 });
+    const showNotification = vi.fn();
+    const previousThread = makeThread({
+      latestTurn: {
+        turnId: TurnId.makeUnsafe("turn-1"),
+        state: "running",
+        requestedAt: "2026-03-07T12:00:00.000Z",
+        startedAt: "2026-03-07T12:00:01.000Z",
+        completedAt: null,
+        assistantMessageId: null,
+      },
+    });
+    const completedThread = makeThread({
+      latestTurn: {
+        turnId: TurnId.makeUnsafe("turn-1"),
+        state: "completed",
+        requestedAt: "2026-03-07T12:00:00.000Z",
+        startedAt: "2026-03-07T12:00:01.000Z",
+        completedAt: "2026-03-07T12:00:05.000Z",
+        assistantMessageId: MessageId.makeUnsafe("assistant-1"),
+      },
+    });
+
+    controller.update({
+      threads: [previousThread],
+      threadsHydrated: true,
+      supportsNotifications: true,
+      notificationPermission: "granted",
+      isBackground: true,
+      getCurrentThread: () => previousThread,
+      showNotification,
+    });
+
+    controller.update({
+      threads: [completedThread],
+      threadsHydrated: true,
+      supportsNotifications: true,
+      notificationPermission: "granted",
+      isBackground: true,
+      getCurrentThread: () => makeThread(),
+      showNotification,
+    });
+
+    vi.advanceTimersByTime(1000);
+    expect(showNotification).not.toHaveBeenCalled();
   });
 });
