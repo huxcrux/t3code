@@ -1,45 +1,32 @@
 import { ThreadId, type ProjectId, type ResolvedKeybindingsConfig } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useNavigate } from "@tanstack/react-router";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { useComposerDraftStore } from "../composerDraftStore";
-import { useProjectNavigation } from "../hooks/useProjectNavigation";
+import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { isTerminalFocused } from "../lib/terminalFocus";
-import { getTerminalStatusIndicator, getThreadStatusPill } from "../lib/threadStatus";
 import { useStore } from "../store";
-import { derivePendingApprovals } from "../session-logic";
-import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
+import { derivePendingApprovals, derivePendingUserInputs } from "../session-logic";
 import { ProjectPickerDialog } from "./ProjectPickerDialog";
 import { type ProjectPickerThreadSearchEntry } from "../lib/projectPickerSearch";
+import { resolveThreadStatusPill } from "./Sidebar.logic";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 
 export function ChatShellProjectPicker() {
-  const projects = useStore((store) => store.projects);
   const threads = useStore((store) => store.threads);
-  const terminalStateByThreadId = useTerminalStateStore((state) => state.terminalStateByThreadId);
   const navigate = useNavigate();
-  const routeThreadId = useParams({
-    strict: false,
-    select: (params) => (params.threadId ? ThreadId.makeUnsafe(params.threadId) : null),
-  });
-  const activeDraftThread = useComposerDraftStore((store) =>
-    routeThreadId ? store.draftThreadsByThreadId[routeThreadId] ?? null : null,
-  );
-  const { openProject } = useProjectNavigation();
+  const { activeDraftThread, activeThread, handleNewThread, projects, routeThreadId } =
+    useHandleNewThread();
   const { data: keybindings = EMPTY_KEYBINDINGS } = useQuery({
     ...serverConfigQueryOptions(),
     select: (config) => config.keybindings,
   });
   const [open, setOpen] = useState(false);
   const [focusRequestId, setFocusRequestId] = useState(0);
-
-  const activeProjectId = useMemo<ProjectId | null>(() => {
-    const activeThread = routeThreadId ? threads.find((thread) => thread.id === routeThreadId) : null;
-    return activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
-  }, [activeDraftThread?.projectId, routeThreadId, threads]);
+  const activeProjectId: ProjectId | null =
+    activeThread?.projectId ?? activeDraftThread?.projectId ?? null;
 
   const threadCountByProjectId = useMemo(() => {
     const counts = new Map<ProjectId, number>();
@@ -73,20 +60,20 @@ export function ChatShellProjectPicker() {
     const indicators = new Map<
       ThreadId,
       {
-        threadStatus: ReturnType<typeof getThreadStatusPill>;
-        terminalStatus: ReturnType<typeof getTerminalStatusIndicator>;
+        threadStatus: ReturnType<typeof resolveThreadStatusPill>;
       }
     >();
     for (const thread of threads) {
       indicators.set(thread.id, {
-        threadStatus: getThreadStatusPill(thread, derivePendingApprovals(thread.activities).length > 0),
-        terminalStatus: getTerminalStatusIndicator(
-          selectThreadTerminalState(terminalStateByThreadId, thread.id).runningTerminalIds,
-        ),
+        threadStatus: resolveThreadStatusPill({
+          thread,
+          hasPendingApprovals: derivePendingApprovals(thread.activities).length > 0,
+          hasPendingUserInput: derivePendingUserInputs(thread.activities).length > 0,
+        }),
       });
     }
     return indicators;
-  }, [terminalStateByThreadId, threads]);
+  }, [threads]);
 
   const openPicker = useCallback(() => {
     setOpen(true);
@@ -124,7 +111,7 @@ export function ChatShellProjectPicker() {
       activeThreadId={routeThreadId}
       threadCountByProjectId={threadCountByProjectId}
       threadIndicatorsByThreadId={threadIndicatorsByThreadId}
-      onSelectProject={openProject}
+      onSelectProject={handleNewThread}
       onSelectThread={async (threadId) => {
         await navigate({
           to: "/$threadId",

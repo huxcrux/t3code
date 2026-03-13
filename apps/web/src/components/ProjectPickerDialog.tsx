@@ -1,7 +1,6 @@
-import { TerminalIcon } from "lucide-react";
+import { FolderIcon } from "lucide-react";
 import { type ProjectId, type ThreadId } from "@t3tools/contracts";
 import { useEffect, useMemo, useState } from "react";
-import { ProjectFavicon } from "./ProjectFavicon";
 import {
   Command,
   CommandDialog,
@@ -21,12 +20,9 @@ import {
   type ProjectPickerSearchResult,
   type ProjectPickerThreadSearchEntry,
 } from "../lib/projectPickerSearch";
-import {
-  type TerminalStatusIndicator,
-  type ThreadStatusPill,
-} from "../lib/threadStatus";
 import { type Project } from "../types";
 import { cn } from "../lib/utils";
+import { type ThreadStatusPill } from "./Sidebar.logic";
 
 interface ProjectPickerDialogProps {
   open: boolean;
@@ -40,7 +36,6 @@ interface ProjectPickerDialogProps {
     ThreadId,
     {
       threadStatus: ThreadStatusPill | null;
-      terminalStatus: TerminalStatusIndicator | null;
     }
   >;
   onSelectProject: (projectId: ProjectId) => Promise<void> | void;
@@ -100,10 +95,10 @@ export function ProjectPickerDialog(props: ProjectPickerDialogProps) {
   useEffect(() => {
     if (!props.open) return;
     const preferredItemKey: ProjectPickerSearchResult["key"] | null =
-      props.activeProjectId && itemKeys.includes(`project:${props.activeProjectId}`)
-        ? (`project:${props.activeProjectId}` as const)
-        : props.activeThreadId && itemKeys.includes(`thread:${props.activeThreadId}`)
-          ? (`thread:${props.activeThreadId}` as const)
+      props.activeThreadId && itemKeys.includes(`thread:${props.activeThreadId}`)
+        ? (`thread:${props.activeThreadId}` as const)
+        : props.activeProjectId && itemKeys.includes(`project:${props.activeProjectId}`)
+          ? (`project:${props.activeProjectId}` as const)
         : null;
     setHighlightedItemKey((current) => {
       if (isEmptyQuery && preferredItemKey) {
@@ -182,11 +177,7 @@ export function ProjectPickerDialog(props: ProjectPickerDialogProps) {
                         }}
                       >
                         <div className="flex min-w-0 flex-1 items-center gap-3">
-                          <ProjectFavicon
-                            cwd={project.cwd}
-                            className="size-4"
-                            fallbackClassName="size-4"
-                          />
+                          <FolderIcon className="size-4 shrink-0 text-muted-foreground/50" />
                           <div className="min-w-0 flex-1">
                             <div className="flex items-center gap-2">
                               <span className="truncate text-sm font-medium text-foreground/95">
@@ -276,23 +267,9 @@ export function ProjectPickerDialog(props: ProjectPickerDialogProps) {
                             </p>
                           ) : null}
                         </div>
-                        <div className="ml-3 flex shrink-0 items-center gap-2">
-                          {indicators?.terminalStatus ? (
-                            <span
-                              role="img"
-                              aria-label={indicators.terminalStatus.label}
-                              title={indicators.terminalStatus.label}
-                              className={`inline-flex items-center justify-center ${indicators.terminalStatus.colorClass}`}
-                            >
-                              <TerminalIcon
-                                className={`size-3 ${indicators.terminalStatus.pulse ? "animate-pulse" : ""}`}
-                              />
-                            </span>
-                          ) : null}
-                          <span className="text-[11px] text-muted-foreground/60">
-                            {formatRelativeTime(thread.createdAt)}
-                          </span>
-                        </div>
+                        <span className="ml-3 shrink-0 text-[11px] text-muted-foreground/60">
+                          {formatRelativeTime(thread.createdAt)}
+                        </span>
                       </CommandItem>
                     );
                   })}
