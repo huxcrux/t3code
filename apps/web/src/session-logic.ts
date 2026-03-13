@@ -53,6 +53,8 @@ export interface CompactionEntry {
   detail?: string;
 }
 
+type CompactionActivityKind = "compaction.started" | "compaction.completed";
+
 export interface PendingApproval {
   requestId: ApprovalRequestId;
   requestKind: "command" | "file-read" | "file-change";
@@ -426,10 +428,7 @@ export function deriveWorkLogEntries(
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   return ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
-    .filter(
-      (activity) =>
-        activity.kind !== "compaction.started" && activity.kind !== "compaction.completed",
-    )
+    .filter((activity) => !isCompactionActivityKind(activity.kind))
     .filter((activity) => activity.kind !== "tool.started")
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.summary !== "Checkpoint captured")
@@ -479,87 +478,110 @@ export function deriveCompactionEntries(
 ): CompactionEntry[] {
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   const entries: CompactionEntry[] = [];
-  const openEntryIndices: number[] = [];
+  const openEntries: Array<{ index: number; turnId: TurnId | null }> = [];
 
   for (const activity of ordered) {
-    if (activity.kind !== "compaction.started" && activity.kind !== "compaction.completed") {
+    if (!isCompactionActivityKind(activity.kind)) {
       continue;
     }
-
-    const payload =
-      activity.payload && typeof activity.payload === "object"
-        ? (activity.payload as Record<string, unknown>)
-        : null;
-    const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
 
     if (activity.kind === "compaction.started") {
-      entries.push({
-        id: activity.id,
-        createdAt: activity.createdAt,
-        startedAt: activity.createdAt,
-        turnId: activity.turnId,
-        status: "inProgress",
-        ...(detail ? { detail } : {}),
-      });
-      openEntryIndices.push(entries.length - 1);
+      entries.push(buildCompactionEntry(activity, "inProgress"));
+      openEntries.push({ index: entries.length - 1, turnId: activity.turnId });
       continue;
     }
 
-    let matchedOpenEntryIndex = -1;
-    for (let index = openEntryIndices.length - 1; index >= 0; index -= 1) {
-      const candidateIndex = openEntryIndices[index];
-      if (candidateIndex === undefined) {
+    const matchedOpenEntryStackIndex = findMatchingOpenCompactionIndex(
+      openEntries,
+      activity.turnId,
+    );
+    if (matchedOpenEntryStackIndex >= 0) {
+      const matchedOpenEntry = openEntries.splice(matchedOpenEntryStackIndex, 1)[0];
+      if (!matchedOpenEntry) {
         continue;
       }
-      const candidate = entries[candidateIndex];
-      if (!candidate || candidate.completedAt) {
-        openEntryIndices.splice(index, 1);
-        continue;
-      }
-      if (activity.turnId && candidate.turnId && activity.turnId !== candidate.turnId) {
-        continue;
-      }
-      matchedOpenEntryIndex = candidateIndex;
-      openEntryIndices.splice(index, 1);
-      break;
-    }
-
-    if (matchedOpenEntryIndex >= 0) {
-      const candidate = entries[matchedOpenEntryIndex];
+      const candidate = entries[matchedOpenEntry.index];
       if (!candidate) {
         continue;
       }
-      entries[matchedOpenEntryIndex] = {
+      const detail = compactionDetailFromActivity(activity) ?? candidate.detail;
+      entries[matchedOpenEntry.index] = {
         ...candidate,
         status: "completed",
         completedAt: activity.createdAt,
-        ...(detail ? { detail } : candidate.detail ? { detail: candidate.detail } : {}),
+        ...(detail ? { detail } : {}),
       };
       continue;
     }
 
-    const lastEntry = entries.at(-1);
-    if (
-      lastEntry &&
-      lastEntry.status === "completed" &&
-      lastEntry.turnId === activity.turnId &&
-      lastEntry.completedAt === activity.createdAt
-    ) {
+    if (isDuplicateCompletedCompaction(entries.at(-1), activity)) {
       continue;
     }
 
-    entries.push({
-      id: activity.id,
-      createdAt: activity.createdAt,
-      startedAt: activity.createdAt,
-      completedAt: activity.createdAt,
-      turnId: activity.turnId,
-      status: "completed",
-      ...(detail ? { detail } : {}),
-    });
+    entries.push(buildCompactionEntry(activity, "completed"));
   }
 
   return entries;
+}
+
+function isCompactionActivityKind(kind: string): kind is CompactionActivityKind {
+  return kind === "compaction.started" || kind === "compaction.completed";
+}
+
+function compactionDetailFromActivity(activity: OrchestrationThreadActivity): string | undefined {
+  const payload =
+    activity.payload && typeof activity.payload === "object"
+      ? (activity.payload as Record<string, unknown>)
+      : null;
+  return payload && typeof payload.detail === "string" ? payload.detail : undefined;
+}
+
+function buildCompactionEntry(
+  activity: OrchestrationThreadActivity,
+  status: CompactionEntry["status"],
+): CompactionEntry {
+  const detail = compactionDetailFromActivity(activity);
+  return {
+    id: activity.id,
+    createdAt: activity.createdAt,
+    startedAt: activity.createdAt,
+    turnId: activity.turnId,
+    status,
+    ...(status === "completed" ? { completedAt: activity.createdAt } : {}),
+    ...(detail ? { detail } : {}),
+  };
+}
+
+function findMatchingOpenCompactionIndex(
+  openEntries: ReadonlyArray<{ index: number; turnId: TurnId | null }>,
+  turnId: TurnId | null,
+): number {
+  if (openEntries.length === 0) {
+    return -1;
+  }
+  for (let index = openEntries.length - 1; index >= 0; index -= 1) {
+    const openEntry = openEntries[index];
+    if (!openEntry) {
+      continue;
+    }
+    if (turnId && openEntry.turnId && turnId !== openEntry.turnId) {
+      continue;
+    }
+    return index;
+  }
+  return -1;
+}
+
+function isDuplicateCompletedCompaction(
+  lastEntry: CompactionEntry | undefined,
+  activity: OrchestrationThreadActivity,
+): boolean {
+  return Boolean(
+    lastEntry &&
+    lastEntry.status === "completed" &&
+    lastEntry.turnId === activity.turnId &&
+    lastEntry.completedAt === activity.createdAt,
+  );
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

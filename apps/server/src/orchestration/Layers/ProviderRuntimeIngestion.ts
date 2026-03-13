@@ -174,6 +174,31 @@ function requestKindFromCanonicalRequestType(
   }
 }
 
+function compactionActivity(
+  event: ProviderRuntimeEvent,
+  maybeSequence: { sequence?: number },
+  input: {
+    kind: "compaction.started" | "compaction.completed";
+    summary: string;
+    payload?: Record<string, unknown>;
+  },
+): OrchestrationThreadActivity {
+  return {
+    id: event.eventId,
+    createdAt: event.createdAt,
+    tone: "info",
+    kind: input.kind,
+    summary: input.summary,
+    payload: input.payload ?? {},
+    turnId: toTurnId(event.turnId) ?? null,
+    ...maybeSequence,
+  };
+}
+
+function compactionDetailPayload(detail: string | undefined): Record<string, unknown> {
+  return detail ? { detail: truncateDetail(detail) } : {};
+}
+
 function runtimeEventToActivities(
   event: ProviderRuntimeEvent,
 ): ReadonlyArray<OrchestrationThreadActivity> {
@@ -283,18 +308,13 @@ function runtimeEventToActivities(
         return [];
       }
       return [
-        {
-          id: event.eventId,
-          createdAt: event.createdAt,
-          tone: "info",
+        compactionActivity(event, maybeSequence, {
           kind: "compaction.completed",
           summary: "Context compacted",
           payload: {
             state: event.payload.state,
           },
-          turnId: toTurnId(event.turnId) ?? null,
-          ...maybeSequence,
-        },
+        }),
       ];
     }
 
@@ -451,19 +471,14 @@ function runtimeEventToActivities(
     case "item.completed": {
       if (event.payload.itemType === "context_compaction") {
         return [
-          {
-            id: event.eventId,
-            createdAt: event.createdAt,
-            tone: "info",
+          compactionActivity(event, maybeSequence, {
             kind: "compaction.completed",
             summary: "Context compacted",
             payload: {
               itemType: event.payload.itemType,
-              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+              ...compactionDetailPayload(event.payload.detail),
             },
-            turnId: toTurnId(event.turnId) ?? null,
-            ...maybeSequence,
-          },
+          }),
         ];
       }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
@@ -489,19 +504,14 @@ function runtimeEventToActivities(
     case "item.started": {
       if (event.payload.itemType === "context_compaction") {
         return [
-          {
-            id: event.eventId,
-            createdAt: event.createdAt,
-            tone: "info",
+          compactionActivity(event, maybeSequence, {
             kind: "compaction.started",
             summary: "Compacting context",
             payload: {
               itemType: event.payload.itemType,
-              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+              ...compactionDetailPayload(event.payload.detail),
             },
-            turnId: toTurnId(event.turnId) ?? null,
-            ...maybeSequence,
-          },
+          }),
         ];
       }
       if (!isToolLifecycleItemType(event.payload.itemType)) {

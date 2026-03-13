@@ -90,16 +90,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
-  const activeCompaction = useMemo(() => {
-    for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
-      const entry = timelineEntries[index];
-      if (!entry || entry.kind !== "compaction") continue;
-      if (entry.compaction.status === "inProgress") {
-        return entry.compaction;
-      }
-    }
-    return null;
-  }, [timelineEntries]);
+  const activeCompaction = useMemo(() => findActiveCompaction(timelineEntries), [timelineEntries]);
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -697,47 +688,53 @@ function formatWorkingStatus(input: {
   return "Working...";
 }
 
+function findActiveCompaction(
+  timelineEntries: ReturnType<typeof deriveTimelineEntries>,
+): TimelineCompaction | null {
+  for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
+    const entry = timelineEntries[index];
+    if (!entry || entry.kind !== "compaction") {
+      continue;
+    }
+    if (entry.compaction.status === "inProgress") {
+      return entry.compaction;
+    }
+  }
+  return null;
+}
+
 const CompactionEventCard = memo(function CompactionEventCard(props: {
   compaction: TimelineCompaction;
   nowIso: string;
   timestampFormat: TimestampFormat;
 }) {
   const { compaction, nowIso, timestampFormat } = props;
-  const elapsed =
-    compaction.status === "completed"
-      ? formatElapsed(compaction.startedAt, compaction.completedAt)
-      : formatElapsed(compaction.startedAt, nowIso);
-  const statusLabel =
-    compaction.status === "completed"
-      ? elapsed
-        ? `Completed in ${elapsed}`
-        : "Completed"
-      : elapsed
-        ? `Running for ${elapsed}`
-        : "Compacting";
-  const timestampLabel =
-    compaction.status === "completed"
-      ? formatMessageMeta(compaction.createdAt, elapsed, timestampFormat)
-      : formatTimestamp(compaction.createdAt, timestampFormat);
   const isCompleted = compaction.status === "completed";
-  const cardClassName = isCompleted
-    ? "rounded-2xl border border-border/45 bg-transparent px-3.5 py-3"
-    : "rounded-2xl border border-amber-500/30 bg-amber-500/6 px-3.5 py-3";
-  const iconClassName = isCompleted
-    ? "border-border/50 bg-transparent text-foreground/70"
-    : "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300";
-  const statusClassName = isCompleted
-    ? "text-muted-foreground/70"
-    : "text-amber-700/80 dark:text-amber-300/80";
+  const elapsed = isCompleted
+    ? formatElapsed(compaction.startedAt, compaction.completedAt)
+    : formatElapsed(compaction.startedAt, nowIso);
+  const statusLabel = elapsed ? `Running for ${elapsed}` : "Compacting";
+  const timestampLabel = isCompleted
+    ? formatMessageMeta(compaction.createdAt, elapsed, timestampFormat)
+    : formatTimestamp(compaction.createdAt, timestampFormat);
 
   return (
     <div className="min-w-0 px-1 py-0.5">
-      <div className={cardClassName}>
+      <div
+        className={cn(
+          "rounded-2xl px-3.5 py-3",
+          isCompleted
+            ? "border border-border/45 bg-transparent"
+            : "border border-amber-500/30 bg-amber-500/6",
+        )}
+      >
         <div className="flex items-start gap-3">
           <span
             className={cn(
               "flex size-8 shrink-0 items-center justify-center rounded-full border",
-              iconClassName,
+              isCompleted
+                ? "border-border/50 bg-transparent text-foreground/70"
+                : "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300",
             )}
           >
             <BotIcon className="size-4" />
@@ -751,7 +748,7 @@ const CompactionEventCard = memo(function CompactionEventCard(props: {
                 <span
                   className={cn(
                     "shrink-0 text-[10px] uppercase tracking-[0.12em]",
-                    statusClassName,
+                    "text-amber-700/80 dark:text-amber-300/80",
                   )}
                 >
                   {statusLabel}
