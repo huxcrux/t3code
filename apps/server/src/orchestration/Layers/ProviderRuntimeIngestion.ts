@@ -1050,6 +1050,16 @@ const make = Effect.gen(function* () {
         });
       }
 
+      if (event.type === "thread.token-usage.updated" && event.payload.contextWindow) {
+        yield* orchestrationEngine.dispatch({
+          type: "thread.context-window.set",
+          commandId: providerCommandId(event, "thread-context-window-set"),
+          threadId: thread.id,
+          contextWindow: event.payload.contextWindow,
+          createdAt: event.payload.contextWindow.updatedAt,
+        });
+      }
+
       if (event.type === "turn.diff.updated") {
         const turnId = toTurnId(event.turnId);
         if (turnId && (yield* isGitRepoForThread(thread.id))) {

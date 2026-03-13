@@ -87,6 +87,7 @@ describe("resolveThreadStatusPill", () => {
   const baseThread = {
     interactionMode: "plan" as const,
     latestTurn: null,
+    contextWindow: null,
     lastVisitedAt: undefined,
     proposedPlans: [],
     session: {

@@ -53,6 +53,7 @@ import {
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  deriveContextMeterState,
   findLatestProposedPlan,
   deriveWorkLogEntries,
   hasToolActivityForTurn,
@@ -144,6 +145,7 @@ import { ComposerPendingUserInputPanel } from "./chat/ComposerPendingUserInputPa
 import { ComposerPlanFollowUpBanner } from "./chat/ComposerPlanFollowUpBanner";
 import { ProviderHealthBanner } from "./chat/ProviderHealthBanner";
 import { ThreadErrorBanner } from "./chat/ThreadErrorBanner";
+import { ContextMeterCircle } from "./chat/ContextMeterCircle";
 import {
   buildLocalDraftThread,
   buildTemporaryWorktreeBranchName,
@@ -576,6 +578,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     sendStartedAt,
   );
   const threadActivities = activeThread?.activities ?? EMPTY_ACTIVITIES;
+  const contextMeterState = deriveContextMeterState(activeThread ?? null);
   const workLogEntries = useMemo(
     () => deriveWorkLogEntries(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
@@ -3347,10 +3350,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
                 {/* Textarea area */}
                 <div
                   className={cn(
-                    "relative px-3 pb-2 sm:px-4",
+                    "relative pb-2 pl-3 pr-14 sm:pl-4 sm:pr-16",
                     hasComposerHeader ? "pt-2.5 sm:pt-3" : "pt-3.5 sm:pt-4",
                   )}
                 >
+                  <ContextMeterCircle {...contextMeterState} />
                   {composerMenuOpen && !isComposerApprovalState && (
                     <div className="absolute inset-x-0 bottom-full z-20 mb-2 px-1">
                       <ComposerCommandMenu

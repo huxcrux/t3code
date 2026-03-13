@@ -1428,6 +1428,41 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe("# Plan title");
   });
 
+  it("projects thread context window updates into thread state", async () => {
+    const harness = await createHarness();
+    const now = "2026-03-13T12:00:00.000Z";
+
+    harness.emit({
+      type: "thread.token-usage.updated",
+      eventId: asEventId("evt-thread-context-window"),
+      provider: "codex",
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        contextWindow: {
+          totalTokens: 400_000,
+          usedTokens: 120_001,
+          remainingTokens: 279_999,
+          percentLeft: 70,
+          updatedAt: now,
+        },
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) => entry.contextWindow?.percentLeft === 70,
+    );
+
+    expect(thread.contextWindow).toEqual({
+      totalTokens: 400_000,
+      usedTokens: 120_001,
+      remainingTokens: 279_999,
+      percentLeft: 70,
+      updatedAt: now,
+    });
+  });
+
   it("projects structured user input request and resolution as thread activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

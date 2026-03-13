@@ -82,6 +82,7 @@ function createMinimalSnapshot(): OrchestrationReadModel {
         branch: "main",
         worktreePath: null,
         latestTurn: null,
+        contextWindow: null,
         createdAt: NOW_ISO,
         updatedAt: NOW_ISO,
         deletedAt: null,

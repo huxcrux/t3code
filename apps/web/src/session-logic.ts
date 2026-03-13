@@ -14,6 +14,7 @@ import type {
   ChatMessage,
   ProposedPlan,
   SessionPhase,
+  Thread,
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
@@ -114,6 +115,32 @@ export function formatElapsed(startIso: string, endIso: string | undefined): str
     return null;
   }
   return formatDuration(endedAt - startedAt);
+}
+
+export type ContextMeterState =
+  | {
+      kind: "known";
+      percent: number;
+      totalTokens: number;
+      usedTokens: number;
+      remainingTokens: number;
+    }
+  | { kind: "unknown" };
+
+export function deriveContextMeterState(thread: Thread | null | undefined): ContextMeterState {
+  if (!thread) {
+    return { kind: "unknown" };
+  }
+  if (thread.contextWindow) {
+    return {
+      kind: "known",
+      percent: thread.contextWindow.percentLeft,
+      totalTokens: thread.contextWindow.totalTokens,
+      usedTokens: thread.contextWindow.usedTokens,
+      remainingTokens: thread.contextWindow.remainingTokens,
+    };
+  }
+  return { kind: "unknown" };
 }
 
 type LatestTurnTiming = Pick<OrchestrationLatestTurn, "turnId" | "startedAt" | "completedAt">;

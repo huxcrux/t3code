@@ -29,6 +29,7 @@ export function buildLocalDraftThread(
     error,
     createdAt: draftThread.createdAt,
     latestTurn: null,
+    contextWindow: null,
     lastVisitedAt: draftThread.createdAt,
     branch: draftThread.branch,
     worktreePath: draftThread.worktreePath,

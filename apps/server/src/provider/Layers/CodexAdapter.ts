@@ -109,6 +109,72 @@ function asNumber(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
+function asNonNegativeInt(value: unknown): number | undefined {
+  const numeric = asNumber(value);
+  if (numeric === undefined || numeric < 0) {
+    return undefined;
+  }
+  return Math.floor(numeric);
+}
+
+const CONTEXT_WINDOW_BASELINE_TOKENS = 12_000;
+
+function percentOfContextWindowRemaining(usedTokens: number, totalTokens: number): number {
+  if (totalTokens <= CONTEXT_WINDOW_BASELINE_TOKENS) {
+    return 0;
+  }
+
+  const effectiveWindow = totalTokens - CONTEXT_WINDOW_BASELINE_TOKENS;
+  const adjustedUsedTokens = Math.max(usedTokens - CONTEXT_WINDOW_BASELINE_TOKENS, 0);
+  const remainingTokens = Math.max(effectiveWindow - adjustedUsedTokens, 0);
+  return Math.max(0, Math.min(100, Math.round((remainingTokens / effectiveWindow) * 100)));
+}
+
+function normalizeContextWindow(
+  value: unknown,
+  updatedAt: string,
+): {
+  totalTokens: number;
+  usedTokens: number;
+  remainingTokens: number;
+  percentLeft: number;
+  updatedAt: string;
+} | null {
+  const payload = asObject(value);
+  if (!payload) {
+    return null;
+  }
+
+  const totalUsage = asObject(payload.total);
+  const totalTokens =
+    asNonNegativeInt(payload.total_tokens) ??
+    asNonNegativeInt(payload.totalTokens) ??
+    asNonNegativeInt(payload.tokenMax) ??
+    asNonNegativeInt(payload.model_context_window) ??
+    asNonNegativeInt(payload.modelContextWindow);
+  const usedTokens =
+    asNonNegativeInt(payload.used_tokens) ??
+    asNonNegativeInt(payload.usedTokens) ??
+    asNonNegativeInt(payload.tokenUsage) ??
+    asNonNegativeInt(totalUsage?.total_tokens) ??
+    asNonNegativeInt(totalUsage?.totalTokens);
+
+  if (totalTokens === undefined || usedTokens === undefined || totalTokens <= 0) {
+    return null;
+  }
+
+  const remainingTokens = Math.max(totalTokens - usedTokens, 0);
+  const percentLeft = percentOfContextWindowRemaining(usedTokens, totalTokens);
+
+  return {
+    totalTokens,
+    usedTokens,
+    remainingTokens,
+    percentLeft,
+    updatedAt,
+  };
+}
+
 function toTurnStatus(value: unknown): "completed" | "failed" | "cancelled" | "interrupted" {
   switch (value) {
     case "completed":
@@ -700,12 +766,16 @@ function mapToRuntimeEvents(
   }
 
   if (event.method === "thread/tokenUsage/updated") {
+    const tokenUsage =
+      asObject(event.payload)?.tokenUsage ?? asObject(event.payload)?.usage ?? event.payload;
+    const contextWindow = normalizeContextWindow(tokenUsage, event.createdAt);
     return [
       {
         type: "thread.token-usage.updated",
         ...runtimeEventBase(event, canonicalThreadId),
         payload: {
-          usage: event.payload ?? {},
+          ...(contextWindow ? { contextWindow } : {}),
+          ...(event.payload !== undefined ? { usage: event.payload } : {}),
         },
       },
     ];
@@ -1012,19 +1082,30 @@ function mapToRuntimeEvents(
     const msg = codexEventMessage(payload);
     const taskId = asString(payload?.id);
     const description = asString(msg?.text);
-    if (!taskId || !description) {
-      return [];
-    }
-    return [
-      {
+    const rawContextWindow = msg?.context_window ?? msg?.contextWindow;
+    const contextWindow = normalizeContextWindow(rawContextWindow, event.createdAt);
+    const events: ProviderRuntimeEvent[] = [];
+    if (taskId && description) {
+      events.push({
         ...codexEventBase(event, canonicalThreadId),
         type: "task.progress",
         payload: {
           taskId: asRuntimeTaskId(taskId),
           description,
         },
-      },
-    ];
+      });
+    }
+    if (contextWindow) {
+      events.push({
+        ...codexEventBase(event, canonicalThreadId),
+        type: "thread.token-usage.updated",
+        payload: {
+          contextWindow,
+          usage: rawContextWindow,
+        },
+      });
+    }
+    return events;
   }
 
   if (event.method === "codex/event/reasoning_content_delta") {

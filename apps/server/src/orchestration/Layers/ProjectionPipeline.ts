@@ -426,6 +426,7 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             branch: event.payload.branch,
             worktreePath: event.payload.worktreePath,
             latestTurnId: null,
+            contextWindow: null,
             createdAt: event.payload.createdAt,
             updatedAt: event.payload.updatedAt,
             deletedAt: null,
@@ -525,6 +526,21 @@ const makeOrchestrationProjectionPipeline = Effect.gen(function* () {
             ...existingRow.value,
             latestTurnId: event.payload.session.activeTurnId,
             updatedAt: event.occurredAt,
+          });
+          return;
+        }
+
+        case "thread.context-window-set": {
+          const existingRow = yield* projectionThreadRepository.getById({
+            threadId: event.payload.threadId,
+          });
+          if (Option.isNone(existingRow)) {
+            return;
+          }
+          yield* projectionThreadRepository.upsert({
+            ...existingRow.value,
+            contextWindow: event.payload.contextWindow,
+            updatedAt: event.payload.contextWindow.updatedAt,
           });
           return;
         }

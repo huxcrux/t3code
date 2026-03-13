@@ -663,7 +663,7 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
   it.effect("maps Codex task and reasoning event chunks into canonical runtime events", () =>
     Effect.gen(function* () {
       const adapter = yield* CodexAdapter;
-      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 5)).pipe(
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 6)).pipe(
         Effect.forkChild,
       );
 
@@ -696,6 +696,10 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
           msg: {
             type: "agent_reasoning",
             text: "Need to compare both transport layers before finalizing the plan.",
+            context_window: {
+              total_tokens: 400_000,
+              used_tokens: 100_001,
+            },
           },
         },
       } satisfies ProviderEvent);
@@ -754,27 +758,127 @@ lifecycleLayer("CodexAdapterLive lifecycle", (it) => {
         );
       }
 
-      assert.equal(events[2]?.type, "content.delta");
-      if (events[2]?.type === "content.delta") {
-        assert.equal(events[2].turnId, "turn-structured-1");
-        assert.equal(events[2].itemId, "rs_reasoning_1");
-        assert.equal(events[2].payload.streamKind, "reasoning_summary_text");
-        assert.equal(events[2].payload.summaryIndex, 0);
+      assert.equal(events[2]?.type, "thread.token-usage.updated");
+      if (events[2]?.type === "thread.token-usage.updated") {
+        assert.deepEqual(events[2].payload.contextWindow, {
+          totalTokens: 400_000,
+          usedTokens: 100_001,
+          remainingTokens: 299_999,
+          percentLeft: 77,
+          updatedAt: events[2].createdAt,
+        });
       }
 
-      assert.equal(events[3]?.type, "task.completed");
-      if (events[3]?.type === "task.completed") {
+      assert.equal(events[3]?.type, "content.delta");
+      if (events[3]?.type === "content.delta") {
         assert.equal(events[3].turnId, "turn-structured-1");
-        assert.equal(events[3].payload.taskId, "turn-structured-1");
-        assert.equal(events[3].payload.summary, "<proposed_plan>\n# Ship it\n</proposed_plan>");
+        assert.equal(events[3].itemId, "rs_reasoning_1");
+        assert.equal(events[3].payload.streamKind, "reasoning_summary_text");
+        assert.equal(events[3].payload.summaryIndex, 0);
       }
 
-      assert.equal(events[4]?.type, "turn.proposed.completed");
-      if (events[4]?.type === "turn.proposed.completed") {
+      assert.equal(events[4]?.type, "task.completed");
+      if (events[4]?.type === "task.completed") {
         assert.equal(events[4].turnId, "turn-structured-1");
-        assert.equal(events[4].payload.planMarkdown, "# Ship it");
+        assert.equal(events[4].payload.taskId, "turn-structured-1");
+        assert.equal(events[4].payload.summary, "<proposed_plan>\n# Ship it\n</proposed_plan>");
+      }
+
+      assert.equal(events[5]?.type, "turn.proposed.completed");
+      if (events[5]?.type === "turn.proposed.completed") {
+        assert.equal(events[5].turnId, "turn-structured-1");
+        assert.equal(events[5].payload.planMarkdown, "# Ship it");
       }
     }),
+  );
+
+  it.effect("maps thread token usage updates when exact totals are available", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CodexAdapter;
+      const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 1)).pipe(
+        Effect.forkChild,
+      );
+
+      lifecycleManager.emit("event", {
+        id: asEventId("evt-token-usage"),
+        kind: "notification",
+        provider: "codex",
+        threadId: asThreadId("thread-1"),
+        createdAt: "2026-03-13T12:00:00.000Z",
+        method: "thread/tokenUsage/updated",
+        payload: {
+          threadId: "thread-1",
+          turnId: "turn-1",
+          tokenUsage: {
+            total: {
+              totalTokens: 40_000,
+              inputTokens: 20_000,
+              cachedInputTokens: 0,
+              outputTokens: 20_000,
+              reasoningOutputTokens: 0,
+            },
+            last: {
+              totalTokens: 500,
+              inputTokens: 250,
+              cachedInputTokens: 0,
+              outputTokens: 250,
+              reasoningOutputTokens: 0,
+            },
+            modelContextWindow: 400_000,
+          },
+        },
+      } satisfies ProviderEvent);
+
+      const [event] = Array.from(yield* Fiber.join(eventsFiber));
+      assert.equal(event?.type, "thread.token-usage.updated");
+      if (event?.type === "thread.token-usage.updated") {
+        assert.deepEqual(event.payload.contextWindow, {
+          totalTokens: 400_000,
+          usedTokens: 40_000,
+          remainingTokens: 360_000,
+          percentLeft: 93,
+          updatedAt: "2026-03-13T12:00:00.000Z",
+        });
+      }
+    }),
+  );
+
+  it.effect(
+    "uses Codex baseline-adjusted percent calculation for simplified context window payloads",
+    () =>
+      Effect.gen(function* () {
+        const adapter = yield* CodexAdapter;
+        const eventsFiber = yield* Stream.runCollect(Stream.take(adapter.streamEvents, 1)).pipe(
+          Effect.forkChild,
+        );
+
+        lifecycleManager.emit("event", {
+          id: asEventId("evt-context-window-percent"),
+          kind: "notification",
+          provider: "codex",
+          threadId: asThreadId("thread-1"),
+          createdAt: "2026-03-13T12:00:00.000Z",
+          method: "thread/tokenUsage/updated",
+          payload: {
+            usage: {
+              total_tokens: 400_000,
+              used_tokens: 100_001,
+            },
+          },
+        } satisfies ProviderEvent);
+
+        const [event] = Array.from(yield* Fiber.join(eventsFiber));
+        assert.equal(event?.type, "thread.token-usage.updated");
+        if (event?.type === "thread.token-usage.updated") {
+          assert.deepEqual(event.payload.contextWindow, {
+            totalTokens: 400_000,
+            usedTokens: 100_001,
+            remainingTokens: 299_999,
+            percentLeft: 77,
+            updatedAt: "2026-03-13T12:00:00.000Z",
+          });
+        }
+      }),
   );
 });
 

@@ -27,6 +27,7 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     error: null,
     createdAt: "2026-02-13T00:00:00.000Z",
     latestTurn: null,
+    contextWindow: null,
     branch: null,
     worktreePath: null,
     ...overrides,
@@ -61,6 +62,7 @@ function makeReadModelThread(overrides: Partial<OrchestrationReadModel["threads"
     branch: null,
     worktreePath: null,
     latestTurn: null,
+    contextWindow: null,
     createdAt: "2026-02-27T00:00:00.000Z",
     updatedAt: "2026-02-27T00:00:00.000Z",
     deletedAt: null,
@@ -202,6 +204,31 @@ describe("store read model sync", () => {
     const next = syncServerReadModel(initialState, readModel);
 
     expect(next.threads[0]?.model).toBe(DEFAULT_MODEL_BY_PROVIDER.codex);
+  });
+
+  it("maps thread context window data from the snapshot", () => {
+    const initialState = makeState(makeThread());
+    const readModel = makeReadModel(
+      makeReadModelThread({
+        contextWindow: {
+          totalTokens: 400_000,
+          usedTokens: 80_000,
+          remainingTokens: 320_000,
+          percentLeft: 80,
+          updatedAt: "2026-03-13T12:00:00.000Z",
+        },
+      }),
+    );
+
+    const next = syncServerReadModel(initialState, readModel);
+
+    expect(next.threads[0]?.contextWindow).toEqual({
+      totalTokens: 400_000,
+      usedTokens: 80_000,
+      remainingTokens: 320_000,
+      percentLeft: 80,
+      updatedAt: "2026-03-13T12:00:00.000Z",
+    });
   });
 
   it("preserves the current project order when syncing incoming read model updates", () => {

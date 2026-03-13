@@ -250,6 +250,15 @@ export const OrchestrationLatestTurn = Schema.Struct({
 });
 export type OrchestrationLatestTurn = typeof OrchestrationLatestTurn.Type;
 
+export const OrchestrationContextWindow = Schema.Struct({
+  totalTokens: NonNegativeInt,
+  usedTokens: NonNegativeInt,
+  remainingTokens: NonNegativeInt,
+  percentLeft: NonNegativeInt.check(Schema.isLessThanOrEqualTo(100)),
+  updatedAt: IsoDateTime,
+});
+export type OrchestrationContextWindow = typeof OrchestrationContextWindow.Type;
+
 export const OrchestrationThread = Schema.Struct({
   id: ThreadId,
   projectId: ProjectId,
@@ -262,6 +271,7 @@ export const OrchestrationThread = Schema.Struct({
   branch: Schema.NullOr(TrimmedNonEmptyString),
   worktreePath: Schema.NullOr(TrimmedNonEmptyString),
   latestTurn: Schema.NullOr(OrchestrationLatestTurn),
+  contextWindow: Schema.NullOr(OrchestrationContextWindow),
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   deletedAt: Schema.NullOr(IsoDateTime),
@@ -483,6 +493,14 @@ const ThreadSessionSetCommand = Schema.Struct({
   createdAt: IsoDateTime,
 });
 
+const ThreadContextWindowSetCommand = Schema.Struct({
+  type: Schema.Literal("thread.context-window.set"),
+  commandId: CommandId,
+  threadId: ThreadId,
+  contextWindow: OrchestrationContextWindow,
+  createdAt: IsoDateTime,
+});
+
 const ThreadMessageAssistantDeltaCommand = Schema.Struct({
   type: Schema.Literal("thread.message.assistant.delta"),
   commandId: CommandId,
@@ -542,6 +560,7 @@ const ThreadRevertCompleteCommand = Schema.Struct({
 
 const InternalOrchestrationCommand = Schema.Union([
   ThreadSessionSetCommand,
+  ThreadContextWindowSetCommand,
   ThreadMessageAssistantDeltaCommand,
   ThreadMessageAssistantCompleteCommand,
   ThreadProposedPlanUpsertCommand,
@@ -575,6 +594,7 @@ export const OrchestrationEventType = Schema.Literals([
   "thread.reverted",
   "thread.session-stop-requested",
   "thread.session-set",
+  "thread.context-window-set",
   "thread.proposed-plan-upserted",
   "thread.turn-diff-completed",
   "thread.activity-appended",
@@ -720,6 +740,11 @@ export const ThreadSessionSetPayload = Schema.Struct({
   session: OrchestrationSession,
 });
 
+export const ThreadContextWindowSetPayload = Schema.Struct({
+  threadId: ThreadId,
+  contextWindow: OrchestrationContextWindow,
+});
+
 export const ThreadProposedPlanUpsertedPayload = Schema.Struct({
   threadId: ThreadId,
   proposedPlan: OrchestrationProposedPlan,
@@ -847,6 +872,11 @@ export const OrchestrationEvent = Schema.Union([
     ...EventBaseFields,
     type: Schema.Literal("thread.session-set"),
     payload: ThreadSessionSetPayload,
+  }),
+  Schema.Struct({
+    ...EventBaseFields,
+    type: Schema.Literal("thread.context-window-set"),
+    payload: ThreadContextWindowSetPayload,
   }),
   Schema.Struct({
     ...EventBaseFields,

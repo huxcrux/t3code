@@ -2,6 +2,7 @@ import { EventId, MessageId, TurnId, type OrchestrationThreadActivity } from "@t
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveContextMeterState,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
   PROVIDER_OPTIONS,
@@ -13,6 +14,7 @@ import {
   hasToolActivityForTurn,
   isLatestTurnSettled,
 } from "./session-logic";
+import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
 function makeActivity(overrides: {
   id?: string;
@@ -36,6 +38,77 @@ function makeActivity(overrides: {
     ...(overrides.sequence !== undefined ? { sequence: overrides.sequence } : {}),
   };
 }
+
+function makeThread(overrides: Partial<Thread> = {}): Thread {
+  return {
+    id: "thread-1" as never,
+    codexThreadId: null,
+    projectId: "project-1" as never,
+    title: "Thread",
+    model: "gpt-5.3-codex",
+    runtimeMode: DEFAULT_RUNTIME_MODE,
+    interactionMode: DEFAULT_INTERACTION_MODE,
+    session: null,
+    messages: [],
+    proposedPlans: [],
+    error: null,
+    createdAt: "2026-02-23T00:00:00.000Z",
+    latestTurn: null,
+    contextWindow: null,
+    lastVisitedAt: undefined,
+    branch: null,
+    worktreePath: null,
+    turnDiffSummaries: [],
+    activities: [],
+    ...overrides,
+  };
+}
+
+describe("deriveContextMeterState", () => {
+  it("hides the meter for a new thread before any SDK usage data arrives", () => {
+    expect(deriveContextMeterState(makeThread())).toEqual({ kind: "unknown" });
+  });
+
+  it("hides the meter for existing threads without SDK usage data", () => {
+    expect(
+      deriveContextMeterState(
+        makeThread({
+          messages: [
+            {
+              id: MessageId.makeUnsafe("msg-1"),
+              role: "user",
+              text: "hello",
+              createdAt: "2026-02-23T00:00:00.000Z",
+              streaming: false,
+            },
+          ],
+        }),
+      ),
+    ).toEqual({ kind: "unknown" });
+  });
+
+  it("returns the persisted context usage when available", () => {
+    expect(
+      deriveContextMeterState(
+        makeThread({
+          contextWindow: {
+            totalTokens: 400_000,
+            usedTokens: 80_000,
+            remainingTokens: 320_000,
+            percentLeft: 80,
+            updatedAt: "2026-02-23T00:05:00.000Z",
+          },
+        }),
+      ),
+    ).toEqual({
+      kind: "known",
+      percent: 80,
+      totalTokens: 400_000,
+      usedTokens: 80_000,
+      remainingTokens: 320_000,
+    });
+  });
+});
 
 describe("derivePendingApprovals", () => {
   it("tracks open approvals and removes resolved ones", () => {
