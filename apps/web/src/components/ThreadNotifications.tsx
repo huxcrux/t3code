@@ -4,14 +4,7 @@ import { useEffect, useRef } from "react";
 
 import { useAppSettings } from "../appSettings";
 import { useStore } from "../store";
-import { createThreadNotificationCoordinator } from "../threadNotificationCoordinator";
-import {
-  buildThreadNotificationCopy,
-  deriveThreadNotificationEvent,
-  isThreadCompletionNotificationEligible,
-  shouldNotifyForScope,
-} from "../threadNotifications";
-import type { Thread } from "../types";
+import { createThreadNotificationManager } from "../threadNotificationManager";
 
 function selectedThreadIdFromRouterMatches(
   matches: ReadonlyArray<{ params: Record<string, string> }>,
@@ -34,130 +27,56 @@ export function ThreadNotifications() {
   const selectedThreadId = useRouterState({
     select: (state) => selectedThreadIdFromRouterMatches(state.matches as Array<{ params: Record<string, string> }>),
   });
-  const previousThreadByIdRef = useRef<Map<ThreadId, Thread>>(new Map());
-  const coordinatorRef = useRef(createThreadNotificationCoordinator());
-  const initializedRef = useRef(false);
+  const managerRef = useRef(createThreadNotificationManager());
 
   useEffect(() => {
-    const nextThreadById = new Map(threads.map((thread) => [thread.id, thread] as const));
-    if (!threadsHydrated) {
-      previousThreadByIdRef.current = nextThreadById;
-      return;
-    }
+    const supportsNotifications =
+      typeof window !== "undefined" && typeof Notification !== "undefined";
 
-    if (!initializedRef.current) {
-      initializedRef.current = true;
-      previousThreadByIdRef.current = nextThreadById;
-      return;
-    }
-
-    if (typeof window === "undefined" || typeof Notification === "undefined") {
-      previousThreadByIdRef.current = nextThreadById;
-      return;
-    }
-
-    if (
-      !settings.notifyOnUserInputRequired &&
-      !settings.notifyOnCompleted
-    ) {
-      previousThreadByIdRef.current = nextThreadById;
-      return;
-    }
-
-    if (Notification.permission !== "granted") {
-      previousThreadByIdRef.current = nextThreadById;
-      return;
-    }
-
-    const isBackground = document.visibilityState !== "visible" || !document.hasFocus();
-    for (const thread of threads) {
-      const event = deriveThreadNotificationEvent(previousThreadByIdRef.current.get(thread.id), thread);
-      if (!event) {
-        continue;
-      }
-      if (event.kind === "user-input-required" && !settings.notifyOnUserInputRequired) {
-        continue;
-      }
-      if (event.kind === "completed" && !settings.notifyOnCompleted) {
-        continue;
-      }
-      if (
-        !shouldNotifyForScope({
-          scope: settings.notificationScope,
-          isBackground,
-          selectedThreadId,
-          threadId: thread.id,
-        })
-      ) {
-        continue;
-      }
-
-      const copy = buildThreadNotificationCopy(thread, event.kind);
-      const emit = () => {
+    managerRef.current.update({
+      threads,
+      threadsHydrated,
+      settings,
+      selectedThreadId,
+      supportsNotifications,
+      notificationPermission: supportsNotifications ? Notification.permission : "unsupported",
+      isBackground:
+        supportsNotifications &&
+        (document.visibilityState !== "visible" || !document.hasFocus()),
+      getCurrentThread: (threadId) =>
+        useStore.getState().threads.find((thread) => thread.id === threadId),
+      showNotification: ({ threadId, title, body }) => {
         try {
-          const notification = new Notification(copy.title, {
-            body: copy.body,
-          });
+          const notification = new Notification(title, { body });
           notification.addEventListener("click", () => {
             window.focus();
             void navigate({
               to: "/$threadId",
-              params: { threadId: thread.id },
+              params: { threadId },
             });
             notification.close();
           });
         } catch (error) {
           console.warn("Failed to show thread notification", {
-            notificationId: event.notificationId,
+            threadId,
+            title,
             error,
           });
         }
-      };
-
-      if (event.priority === "action") {
-        coordinatorRef.current.schedule(event, emit);
-        continue;
-      }
-
-      coordinatorRef.current.schedule(event, emit, {
-        shouldEmit: () => {
-          const currentThread = useStore
-            .getState()
-            .threads.find((current) => current.id === event.threadId);
-          if (!currentThread) {
-            return false;
-          }
-          if (currentThread.latestTurn?.turnId !== event.turnId) {
-            return false;
-          }
-          const currentCompletedAt = currentThread.latestTurn?.completedAt;
-          if (!currentCompletedAt) {
-            return false;
-          }
-          const currentNotificationId = `completed:${currentThread.id}:${event.turnId}:${currentCompletedAt}`;
-          if (currentNotificationId !== event.notificationId) {
-            return false;
-          }
-          return isThreadCompletionNotificationEligible(currentThread);
-        },
-      });
-    }
-
-    previousThreadByIdRef.current = nextThreadById;
+      },
+    });
   }, [
     navigate,
     selectedThreadId,
-    settings.notificationScope,
-    settings.notifyOnCompleted,
-    settings.notifyOnUserInputRequired,
+    settings,
     threads,
     threadsHydrated,
   ]);
 
   useEffect(() => {
-    const coordinator = coordinatorRef.current;
+    const manager = managerRef.current;
     return () => {
-      coordinator.dispose();
+      manager.dispose();
     };
   }, []);
 
