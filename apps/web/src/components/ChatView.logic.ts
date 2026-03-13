@@ -28,7 +28,6 @@ export function buildLocalDraftThread(
     messages: [],
     error,
     createdAt: draftThread.createdAt,
-    updatedAt: draftThread.createdAt,
     latestTurn: null,
     lastVisitedAt: draftThread.createdAt,
     branch: draftThread.branch,

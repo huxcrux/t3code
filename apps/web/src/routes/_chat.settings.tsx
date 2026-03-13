@@ -3,13 +3,10 @@ import { useQuery } from "@tanstack/react-query";
 import { useCallback, useState } from "react";
 import { type ProviderKind } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { ZapIcon } from "lucide-react";
 
 import {
-  APP_SERVICE_TIER_OPTIONS,
   type AppNotificationScope,
   MAX_CUSTOM_MODEL_LENGTH,
-  shouldShowFastTierIcon,
   useAppSettings,
 } from "../appSettings";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
@@ -152,7 +149,6 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
-  const codexServiceTier = settings.codexServiceTier;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
   const notificationPermission =
@@ -426,43 +422,6 @@ function SettingsRouteView() {
               </div>
 
               <div className="space-y-5">
-                <label className="block space-y-1">
-                  <span className="text-xs font-medium text-foreground">Default service tier</span>
-                  <Select
-                    items={APP_SERVICE_TIER_OPTIONS.map((option) => ({
-                      label: option.label,
-                      value: option.value,
-                    }))}
-                    value={codexServiceTier}
-                    onValueChange={(value) => {
-                      if (!value) return;
-                      updateSettings({ codexServiceTier: value });
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectPopup alignItemWithTrigger={false}>
-                      {APP_SERVICE_TIER_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          <div className="flex min-w-0 items-center gap-2">
-                            {option.value === "fast" ? (
-                              <ZapIcon className="size-3.5 text-amber-500" />
-                            ) : (
-                              <span className="size-3.5 shrink-0" aria-hidden="true" />
-                            )}
-                            <span className="truncate">{option.label}</span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                  <span className="text-xs text-muted-foreground">
-                    {APP_SERVICE_TIER_OPTIONS.find((option) => option.value === codexServiceTier)
-                      ?.description ?? "Use Codex defaults without forcing a service tier."}
-                  </span>
-                </label>
-
                 {MODEL_PROVIDER_SETTINGS.map((providerSettings) => {
                   const provider = providerSettings.provider;
                   const customModels = getCustomModelsForProvider(settings, provider);
@@ -560,15 +519,9 @@ function SettingsRouteView() {
                                   key={`${provider}:${slug}`}
                                   className="flex items-center justify-between gap-3 rounded-lg border border-border bg-background px-3 py-2"
                                 >
-                                  <div className="flex min-w-0 flex-1 items-center gap-2">
-                                    {provider === "codex" &&
-                                    shouldShowFastTierIcon(slug, codexServiceTier) ? (
-                                      <ZapIcon className="size-3.5 shrink-0 text-amber-500" />
-                                    ) : null}
-                                    <code className="min-w-0 flex-1 truncate text-xs text-foreground">
-                                      {slug}
-                                    </code>
-                                  </div>
+                                  <code className="min-w-0 flex-1 truncate text-xs text-foreground">
+                                    {slug}
+                                  </code>
                                   <Button
                                     size="xs"
                                     variant="ghost"

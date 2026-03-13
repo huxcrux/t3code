@@ -114,8 +114,6 @@ function ChatRouteLayout() {
     <SidebarProvider defaultOpen>
       <ChatRouteGlobalShortcuts />
       <ThreadNotifications />
-      <ChatRouteGlobalShortcuts />
-      <ThreadNotifications />
       <Sidebar
         side="left"
         collapsible="offcanvas"

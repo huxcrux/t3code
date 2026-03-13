@@ -14,7 +14,6 @@ import type {
   ChatMessage,
   ProposedPlan,
   SessionPhase,
-  Thread,
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
@@ -76,14 +75,6 @@ export interface LatestProposedPlanState {
   turnId: TurnId | null;
   planMarkdown: string;
 }
-
-export type ThreadDerivedStatus =
-  | "pending-approval"
-  | "pending-user-action"
-  | "working"
-  | "connecting"
-  | "completed"
-  | null;
 
 export type TimelineEntry =
   | {
@@ -414,83 +405,6 @@ export function findLatestProposedPlan(
     turnId: latestPlan.turnId,
     planMarkdown: latestPlan.planMarkdown,
   };
-}
-
-export function hasPendingProposedPlanAction(
-  proposedPlans: ReadonlyArray<ProposedPlan>,
-  latestTurn: OrchestrationLatestTurn | null,
-  messages: ReadonlyArray<ChatMessage>,
-): boolean {
-  if (!latestTurn) {
-    return false;
-  }
-
-  const latestPlanForTurn = [...proposedPlans]
-    .filter((proposedPlan) => proposedPlan.turnId === latestTurn.turnId)
-    .toSorted(
-      (left, right) =>
-        left.updatedAt.localeCompare(right.updatedAt) || left.id.localeCompare(right.id),
-    )
-    .at(-1);
-  if (!latestPlanForTurn) {
-    return false;
-  }
-
-  if (!latestTurn.assistantMessageId) {
-    return true;
-  }
-
-  const latestAssistantMessage = messages.find(
-    (message) => message.id === latestTurn.assistantMessageId && message.role === "assistant",
-  );
-  if (!latestAssistantMessage?.completedAt) {
-    return true;
-  }
-
-  return latestAssistantMessage.completedAt.localeCompare(latestPlanForTurn.updatedAt) <= 0;
-}
-
-function hasUnseenCompletion(
-  latestTurn: OrchestrationLatestTurn | null,
-  lastVisitedAt: string | undefined,
-): boolean {
-  if (!latestTurn?.completedAt) return false;
-  const completedAt = Date.parse(latestTurn.completedAt);
-  if (Number.isNaN(completedAt)) return false;
-  if (!lastVisitedAt) return true;
-
-  const lastVisitedAtMs = Date.parse(lastVisitedAt);
-  if (Number.isNaN(lastVisitedAtMs)) return true;
-  return completedAt > lastVisitedAtMs;
-}
-
-export function deriveThreadDerivedStatus(
-  thread: Pick<Thread, "activities" | "messages" | "proposedPlans" | "session" | "latestTurn" | "lastVisitedAt">,
-): ThreadDerivedStatus {
-  if (derivePendingApprovals(thread.activities).length > 0) {
-    return "pending-approval";
-  }
-
-  if (
-    derivePendingUserInputs(thread.activities).length > 0 ||
-    hasPendingProposedPlanAction(thread.proposedPlans, thread.latestTurn, thread.messages)
-  ) {
-    return "pending-user-action";
-  }
-
-  if (thread.session?.status === "running") {
-    return "working";
-  }
-
-  if (thread.session?.status === "connecting") {
-    return "connecting";
-  }
-
-  if (hasUnseenCompletion(thread.latestTurn, thread.lastVisitedAt)) {
-    return "completed";
-  }
-
-  return null;
 }
 
 export function deriveWorkLogEntries(

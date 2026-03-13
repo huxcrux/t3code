@@ -10,32 +10,12 @@ export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const TIMESTAMP_FORMAT_OPTIONS = ["locale", "12-hour", "24-hour"] as const;
 export type TimestampFormat = (typeof TIMESTAMP_FORMAT_OPTIONS)[number];
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
-export const APP_SERVICE_TIER_OPTIONS = [
-  {
-    value: "auto",
-    label: "Automatic",
-    description: "Use Codex defaults without forcing a service tier.",
-  },
-  {
-    value: "fast",
-    label: "Fast",
-    description: "Request the fast service tier when the model supports it.",
-  },
-  {
-    value: "flex",
-    label: "Flex",
-    description: "Request the flex service tier when the model supports it.",
-  },
-] as const;
-export type AppServiceTier = (typeof APP_SERVICE_TIER_OPTIONS)[number]["value"];
-const AppServiceTierSchema = Schema.Literals(["auto", "fast", "flex"]);
 export type AppNotificationScope = "background" | "non-selected-thread" | "always";
 const AppNotificationScopeSchema = Schema.Literals([
   "background",
   "non-selected-thread",
   "always",
 ]);
-const MODELS_WITH_FAST_SUPPORT = new Set(["gpt-5.4"]);
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
 };
@@ -64,7 +44,6 @@ const AppSettingsSchema = Schema.Struct({
   notificationScope: AppNotificationScopeSchema.pipe(
     Schema.withConstructorDefault(() => Option.some("background")),
   ),
-  codexServiceTier: AppServiceTierSchema.pipe(Schema.withConstructorDefault(() => Option.some("auto"))),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),
   ),
@@ -74,24 +53,6 @@ export interface AppModelOption {
   slug: string;
   name: string;
   isCustom: boolean;
-}
-
-export function resolveAppServiceTier(
-  serviceTier: AppServiceTier,
-): Exclude<AppServiceTier, "auto"> | null {
-  return serviceTier === "auto" ? null : serviceTier;
-}
-
-export function shouldShowFastTierIcon(
-  model: string | null | undefined,
-  serviceTier: AppServiceTier,
-): boolean {
-  const normalizedModel = normalizeModelSlug(model);
-  return (
-    resolveAppServiceTier(serviceTier) === "fast" &&
-    normalizedModel !== null &&
-    MODELS_WITH_FAST_SUPPORT.has(normalizedModel)
-  );
 }
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});

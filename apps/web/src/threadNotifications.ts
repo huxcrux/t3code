@@ -1,12 +1,8 @@
 import type { ThreadId, TurnId } from "@t3tools/contracts";
 
-import {
-  derivePendingApprovals,
-  derivePendingUserInputs,
-  deriveThreadDerivedStatus,
-  hasPendingProposedPlanAction,
-} from "./session-logic";
 import type { AppNotificationScope } from "./appSettings";
+import { resolveThreadStatusPill } from "./components/Sidebar.logic";
+import { derivePendingApprovals, derivePendingUserInputs } from "./session-logic";
 import type { ProposedPlan } from "./types";
 import type { Thread } from "./types";
 
@@ -22,21 +18,37 @@ export interface ThreadNotificationEvent {
 
 type ThreadCompletionEligibilityInput = Pick<
   Thread,
-  "activities" | "messages" | "proposedPlans" | "session" | "latestTurn" | "lastVisitedAt"
+  "activities" | "interactionMode" | "proposedPlans" | "session" | "latestTurn" | "lastVisitedAt"
 >;
-
-function isUserActionStatus(status: ReturnType<typeof deriveThreadDerivedStatus>): boolean {
-  return status === "pending-approval" || status === "pending-user-action";
-}
 
 function toTurnKey(threadId: ThreadId, turnId: TurnId | null): string | null {
   return turnId ? `${threadId}:${turnId}` : null;
 }
 
+function deriveStatusPill(
+  thread: Pick<
+    Thread,
+    "activities" | "interactionMode" | "lastVisitedAt" | "latestTurn" | "proposedPlans" | "session"
+  >,
+) {
+  const pendingApprovals = derivePendingApprovals(thread.activities);
+  const pendingUserInputs = derivePendingUserInputs(thread.activities);
+
+  return {
+    pendingApprovals,
+    pendingUserInputs,
+    statusPill: resolveThreadStatusPill({
+      thread,
+      hasPendingApprovals: pendingApprovals.length > 0,
+      hasPendingUserInput: pendingUserInputs.length > 0,
+    }),
+  };
+}
+
 export function isThreadCompletionNotificationEligible(
   thread: ThreadCompletionEligibilityInput,
 ): boolean {
-  return deriveThreadDerivedStatus(thread) === "completed";
+  return deriveStatusPill(thread).statusPill?.label === "Completed";
 }
 
 function deriveLatestPlanForCurrentTurn(thread: Pick<Thread, "proposedPlans" | "latestTurn">): ProposedPlan | null {
@@ -54,12 +66,8 @@ function deriveLatestPlanForCurrentTurn(thread: Pick<Thread, "proposedPlans" | "
 }
 
 function deriveUserActionNotificationEvent(thread: Thread): ThreadNotificationEvent | null {
-  const status = deriveThreadDerivedStatus(thread);
-  if (!isUserActionStatus(status)) {
-    return null;
-  }
-
-  const [oldestPendingApproval] = derivePendingApprovals(thread.activities);
+  const { pendingApprovals, pendingUserInputs, statusPill } = deriveStatusPill(thread);
+  const [oldestPendingApproval] = pendingApprovals;
   if (oldestPendingApproval) {
     const turnId = oldestPendingApproval.turnId ?? thread.latestTurn?.turnId ?? null;
     return {
@@ -72,7 +80,7 @@ function deriveUserActionNotificationEvent(thread: Thread): ThreadNotificationEv
     };
   }
 
-  const [oldestPendingUserInput] = derivePendingUserInputs(thread.activities);
+  const [oldestPendingUserInput] = pendingUserInputs;
   if (oldestPendingUserInput) {
     const turnId = oldestPendingUserInput.turnId ?? thread.latestTurn?.turnId ?? null;
     return {
@@ -85,25 +93,19 @@ function deriveUserActionNotificationEvent(thread: Thread): ThreadNotificationEv
     };
   }
 
-  if (hasPendingProposedPlanAction(thread.proposedPlans, thread.latestTurn, thread.messages)) {
-    const latestPlan = deriveLatestPlanForCurrentTurn(thread);
-    if (latestPlan) {
-      const turnId = thread.latestTurn?.turnId ?? null;
-      return {
-        kind: "user-input-required",
-        notificationId: `plan:${latestPlan.id}:${latestPlan.updatedAt}`,
-        threadId: thread.id,
-        turnId,
-        turnKey: toTurnKey(thread.id, turnId),
-        priority: "action",
-      };
-    }
+  if (statusPill?.label !== "Plan Ready") {
+    return null;
+  }
+
+  const latestPlan = deriveLatestPlanForCurrentTurn(thread);
+  if (!latestPlan) {
+    return null;
   }
 
   const turnId = thread.latestTurn?.turnId ?? null;
   return {
     kind: "user-input-required",
-    notificationId: `user-action:${thread.id}:${thread.latestTurn?.turnId ?? "none"}:${thread.updatedAt}`,
+    notificationId: `plan:${latestPlan.id}:${latestPlan.updatedAt}`,
     threadId: thread.id,
     turnId,
     turnKey: toTurnKey(thread.id, turnId),
@@ -188,8 +190,7 @@ export function buildThreadNotificationCopy(
     };
   }
 
-  const status = deriveThreadDerivedStatus(thread);
-  if (status === "pending-approval") {
+  if (derivePendingApprovals(thread.activities).length > 0) {
     return {
       title: "Approval required",
       body: thread.title,

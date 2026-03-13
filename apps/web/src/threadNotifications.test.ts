@@ -1,5 +1,5 @@
 import { EventId, MessageId, ProjectId, ThreadId, TurnId } from "@t3tools/contracts";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import {
   buildThreadNotificationCopy,
@@ -22,7 +22,6 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     proposedPlans: [],
     error: null,
     createdAt: "2026-03-07T12:00:00.000Z",
-    updatedAt: "2026-03-07T12:00:00.000Z",
     latestTurn: null,
     lastVisitedAt: undefined,
     branch: null,
@@ -187,7 +186,6 @@ describe("deriveThreadNotificationEvent", () => {
       },
     });
     const next = makeThread({
-      updatedAt: "2026-03-07T12:00:06.000Z",
       latestTurn: {
         turnId: TurnId.makeUnsafe("turn-1"),
         state: "completed",
@@ -334,7 +332,6 @@ describe("deriveThreadNotificationEvent", () => {
       ],
     });
     const next = makeThread({
-      updatedAt: "2026-03-07T12:00:07.000Z",
       latestTurn: previous.latestTurn,
       proposedPlans: [
         {
@@ -355,43 +352,6 @@ describe("deriveThreadNotificationEvent", () => {
       turnKey: "thread-1:turn-1",
       priority: "action",
     });
-  });
-
-  it("uses the fallback id when user action is detected without a stable source id", async () => {
-    vi.resetModules();
-    vi.doMock("./session-logic", async () => {
-      const actual = await vi.importActual<typeof import("./session-logic")>("./session-logic");
-      return {
-        ...actual,
-        derivePendingApprovals: () => [],
-        derivePendingUserInputs: () => [],
-        hasPendingProposedPlanAction: () => false,
-        deriveThreadDerivedStatus: (thread: Pick<Thread, "updatedAt">) =>
-          thread.updatedAt === "2026-03-07T12:00:05.000Z" ? "pending-user-action" : null,
-      };
-    });
-
-    try {
-      const { deriveThreadNotificationEvent: deriveFallbackThreadNotificationEvent } = await import(
-        "./threadNotifications"
-      );
-      const previous = makeThread();
-      const next = makeThread({
-        updatedAt: "2026-03-07T12:00:05.000Z",
-      });
-
-      expect(deriveFallbackThreadNotificationEvent(previous, next)).toEqual({
-        kind: "user-input-required",
-        notificationId: "user-action:thread-1:none:2026-03-07T12:00:05.000Z",
-        threadId: ThreadId.makeUnsafe("thread-1"),
-        turnId: null,
-        turnKey: null,
-        priority: "action",
-      });
-    } finally {
-      vi.doUnmock("./session-logic");
-      vi.resetModules();
-    }
   });
 });
 
