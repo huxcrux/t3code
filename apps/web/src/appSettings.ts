@@ -10,6 +10,12 @@ export const MAX_CUSTOM_MODEL_LENGTH = 256;
 export const TIMESTAMP_FORMAT_OPTIONS = ["locale", "12-hour", "24-hour"] as const;
 export type TimestampFormat = (typeof TIMESTAMP_FORMAT_OPTIONS)[number];
 export const DEFAULT_TIMESTAMP_FORMAT: TimestampFormat = "locale";
+export type AppNotificationScope = "background" | "non-selected-thread" | "always";
+const AppNotificationScopeSchema = Schema.Literals([
+  "background",
+  "non-selected-thread",
+  "always",
+]);
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
 };
@@ -30,6 +36,13 @@ const AppSettingsSchema = Schema.Struct({
   ),
   timestampFormat: Schema.Literals(["locale", "12-hour", "24-hour"]).pipe(
     Schema.withConstructorDefault(() => Option.some(DEFAULT_TIMESTAMP_FORMAT)),
+  ),
+  notifyOnUserInputRequired: Schema.Boolean.pipe(
+    Schema.withConstructorDefault(() => Option.some(false)),
+  ),
+  notifyOnCompleted: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(false))),
+  notificationScope: AppNotificationScopeSchema.pipe(
+    Schema.withConstructorDefault(() => Option.some("background")),
   ),
   customCodexModels: Schema.Array(Schema.String).pipe(
     Schema.withConstructorDefault(() => Option.some([])),

@@ -1,5 +1,6 @@
 import type { ThreadId, TurnId } from "@t3tools/contracts";
 
+import type { AppNotificationScope, AppSettings } from "./appSettings";
 import { resolveThreadStatusPill } from "./components/Sidebar.logic";
 import { derivePendingApprovals, derivePendingUserInputs } from "./session-logic";
 import type { ProposedPlan } from "./types";
@@ -27,6 +28,11 @@ export interface ThreadNotificationController {
   update(input: {
     threads: Thread[];
     threadsHydrated: boolean;
+    settings: Pick<
+      AppSettings,
+      "notifyOnCompleted" | "notifyOnUserInputRequired" | "notificationScope"
+    >;
+    selectedThreadId: ThreadId | null;
     supportsNotifications: boolean;
     notificationPermission: NotificationPermission | "unsupported";
     isBackground: boolean;
@@ -173,6 +179,25 @@ export function deriveThreadNotificationEvent(
   }
 
   return nextCompletionEvent;
+}
+
+export function shouldNotifyForScope(input: {
+  scope: AppNotificationScope;
+  isBackground: boolean;
+  selectedThreadId: ThreadId | null;
+  threadId: ThreadId;
+}): boolean {
+  switch (input.scope) {
+    case "always":
+      return true;
+    case "non-selected-thread":
+      return input.selectedThreadId === null
+        ? true
+        : input.threadId !== input.selectedThreadId || input.isBackground;
+    case "background":
+    default:
+      return input.isBackground;
+  }
 }
 
 function canEmitCompletionNotification(
@@ -327,11 +352,7 @@ export function createThreadNotificationController(options?: {
         return;
       }
 
-      if (
-        !input.supportsNotifications ||
-        input.notificationPermission !== "granted" ||
-        !input.isBackground
-      ) {
+      if (!input.supportsNotifications || input.notificationPermission !== "granted") {
         previousThreadById = nextThreadById;
         return;
       }
@@ -339,6 +360,22 @@ export function createThreadNotificationController(options?: {
       for (const thread of input.threads) {
         const event = deriveThreadNotificationEvent(previousThreadById.get(thread.id), thread);
         if (!event) {
+          continue;
+        }
+        if (event.kind === "user-input-required" && !input.settings.notifyOnUserInputRequired) {
+          continue;
+        }
+        if (event.kind === "completed" && !input.settings.notifyOnCompleted) {
+          continue;
+        }
+        if (
+          !shouldNotifyForScope({
+            scope: input.settings.notificationScope,
+            isBackground: input.isBackground,
+            selectedThreadId: input.selectedThreadId,
+            threadId: thread.id,
+          })
+        ) {
           continue;
         }
 

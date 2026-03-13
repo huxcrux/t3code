@@ -8,6 +8,12 @@ import {
 } from "./threadNotifications";
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
 
+const DEFAULT_NOTIFICATION_SETTINGS = {
+  notifyOnUserInputRequired: true,
+  notifyOnCompleted: true,
+  notificationScope: "background" as const,
+};
+
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
     id: ThreadId.makeUnsafe("thread-1"),
@@ -215,6 +221,8 @@ describe("createThreadNotificationController", () => {
     controller.update({
       threads: [initialThread],
       threadsHydrated: true,
+      settings: DEFAULT_NOTIFICATION_SETTINGS,
+      selectedThreadId: null,
       supportsNotifications: true,
       notificationPermission: "granted",
       isBackground: true,
@@ -225,6 +233,8 @@ describe("createThreadNotificationController", () => {
     controller.update({
       threads: [updatedThread],
       threadsHydrated: true,
+      settings: DEFAULT_NOTIFICATION_SETTINGS,
+      selectedThreadId: null,
       supportsNotifications: true,
       notificationPermission: "granted",
       isBackground: true,
@@ -266,6 +276,8 @@ describe("createThreadNotificationController", () => {
     controller.update({
       threads: [previousThread],
       threadsHydrated: true,
+      settings: DEFAULT_NOTIFICATION_SETTINGS,
+      selectedThreadId: null,
       supportsNotifications: true,
       notificationPermission: "granted",
       isBackground: true,
@@ -276,6 +288,8 @@ describe("createThreadNotificationController", () => {
     controller.update({
       threads: [completedThread],
       threadsHydrated: true,
+      settings: DEFAULT_NOTIFICATION_SETTINGS,
+      selectedThreadId: null,
       supportsNotifications: true,
       notificationPermission: "granted",
       isBackground: true,
