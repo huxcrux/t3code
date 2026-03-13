@@ -43,6 +43,16 @@ export interface WorkLogEntry {
   requestKind?: PendingApproval["requestKind"];
 }
 
+export interface CompactionEntry {
+  id: string;
+  createdAt: string;
+  startedAt: string;
+  completedAt?: string;
+  turnId: TurnId | null;
+  status: "inProgress" | "completed";
+  detail?: string;
+}
+
 export interface PendingApproval {
   requestId: ApprovalRequestId;
   requestKind: "command" | "file-read" | "file-change";
@@ -92,6 +102,12 @@ export type TimelineEntry =
       kind: "work";
       createdAt: string;
       entry: WorkLogEntry;
+    }
+  | {
+      id: string;
+      kind: "compaction";
+      createdAt: string;
+      compaction: CompactionEntry;
     };
 
 export function formatDuration(durationMs: number): string {
@@ -410,6 +426,10 @@ export function deriveWorkLogEntries(
   const ordered = [...activities].toSorted(compareActivitiesByOrder);
   return ordered
     .filter((activity) => (latestTurnId ? activity.turnId === latestTurnId : true))
+    .filter(
+      (activity) =>
+        activity.kind !== "compaction.started" && activity.kind !== "compaction.completed",
+    )
     .filter((activity) => activity.kind !== "tool.started")
     .filter((activity) => activity.kind !== "task.started" && activity.kind !== "task.completed")
     .filter((activity) => activity.summary !== "Checkpoint captured")
@@ -452,6 +472,94 @@ export function deriveWorkLogEntries(
       }
       return entry;
     });
+}
+
+export function deriveCompactionEntries(
+  activities: ReadonlyArray<OrchestrationThreadActivity>,
+): CompactionEntry[] {
+  const ordered = [...activities].toSorted(compareActivitiesByOrder);
+  const entries: CompactionEntry[] = [];
+  const openEntryIndices: number[] = [];
+
+  for (const activity of ordered) {
+    if (activity.kind !== "compaction.started" && activity.kind !== "compaction.completed") {
+      continue;
+    }
+
+    const payload =
+      activity.payload && typeof activity.payload === "object"
+        ? (activity.payload as Record<string, unknown>)
+        : null;
+    const detail = payload && typeof payload.detail === "string" ? payload.detail : undefined;
+
+    if (activity.kind === "compaction.started") {
+      entries.push({
+        id: activity.id,
+        createdAt: activity.createdAt,
+        startedAt: activity.createdAt,
+        turnId: activity.turnId,
+        status: "inProgress",
+        ...(detail ? { detail } : {}),
+      });
+      openEntryIndices.push(entries.length - 1);
+      continue;
+    }
+
+    let matchedOpenEntryIndex = -1;
+    for (let index = openEntryIndices.length - 1; index >= 0; index -= 1) {
+      const candidateIndex = openEntryIndices[index];
+      if (candidateIndex === undefined) {
+        continue;
+      }
+      const candidate = entries[candidateIndex];
+      if (!candidate || candidate.completedAt) {
+        openEntryIndices.splice(index, 1);
+        continue;
+      }
+      if (activity.turnId && candidate.turnId && activity.turnId !== candidate.turnId) {
+        continue;
+      }
+      matchedOpenEntryIndex = candidateIndex;
+      openEntryIndices.splice(index, 1);
+      break;
+    }
+
+    if (matchedOpenEntryIndex >= 0) {
+      const candidate = entries[matchedOpenEntryIndex];
+      if (!candidate) {
+        continue;
+      }
+      entries[matchedOpenEntryIndex] = {
+        ...candidate,
+        status: "completed",
+        completedAt: activity.createdAt,
+        ...(detail ? { detail } : candidate.detail ? { detail: candidate.detail } : {}),
+      };
+      continue;
+    }
+
+    const lastEntry = entries.at(-1);
+    if (
+      lastEntry &&
+      lastEntry.status === "completed" &&
+      lastEntry.turnId === activity.turnId &&
+      lastEntry.completedAt === activity.createdAt
+    ) {
+      continue;
+    }
+
+    entries.push({
+      id: activity.id,
+      createdAt: activity.createdAt,
+      startedAt: activity.createdAt,
+      completedAt: activity.createdAt,
+      turnId: activity.turnId,
+      status: "completed",
+      ...(detail ? { detail } : {}),
+    });
+  }
+
+  return entries;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -633,6 +741,7 @@ export function hasToolActivityForTurn(
 export function deriveTimelineEntries(
   messages: ChatMessage[],
   proposedPlans: ProposedPlan[],
+  compactionEntries: CompactionEntry[],
   workEntries: WorkLogEntry[],
 ): TimelineEntry[] {
   const messageRows: TimelineEntry[] = messages.map((message) => ({
@@ -647,13 +756,19 @@ export function deriveTimelineEntries(
     createdAt: proposedPlan.createdAt,
     proposedPlan,
   }));
+  const compactionRows: TimelineEntry[] = compactionEntries.map((compaction) => ({
+    id: compaction.id,
+    kind: "compaction",
+    createdAt: compaction.createdAt,
+    compaction,
+  }));
   const workRows: TimelineEntry[] = workEntries.map((entry) => ({
     id: entry.id,
     kind: "work",
     createdAt: entry.createdAt,
     entry,
   }));
-  return [...messageRows, ...proposedPlanRows, ...workRows].toSorted((a, b) =>
+  return [...messageRows, ...proposedPlanRows, ...compactionRows, ...workRows].toSorted((a, b) =>
     a.createdAt.localeCompare(b.createdAt),
   );
 }

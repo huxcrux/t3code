@@ -39,6 +39,7 @@ import { formatTimestamp } from "../../timestampFormat";
 
 const MAX_VISIBLE_WORK_LOG_ENTRIES = 6;
 const ALWAYS_UNVIRTUALIZED_TAIL_ROWS = 8;
+const COMPACTION_ROW_ESTIMATED_HEIGHT_PX = 104;
 
 interface MessagesTimelineProps {
   hasMessages: boolean;
@@ -89,6 +90,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 }: MessagesTimelineProps) {
   const timelineRootRef = useRef<HTMLDivElement | null>(null);
   const [timelineWidthPx, setTimelineWidthPx] = useState<number | null>(null);
+  const activeCompaction = useMemo(() => {
+    for (let index = timelineEntries.length - 1; index >= 0; index -= 1) {
+      const entry = timelineEntries[index];
+      if (!entry || entry.kind !== "compaction") continue;
+      if (entry.compaction.status === "inProgress") {
+        return entry.compaction;
+      }
+    }
+    return null;
+  }, [timelineEntries]);
 
   useLayoutEffect(() => {
     const timelineRoot = timelineRootRef.current;
@@ -152,6 +163,16 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           id: timelineEntry.id,
           createdAt: timelineEntry.createdAt,
           proposedPlan: timelineEntry.proposedPlan,
+        });
+        continue;
+      }
+
+      if (timelineEntry.kind === "compaction") {
+        nextRows.push({
+          kind: "compaction",
+          id: timelineEntry.id,
+          createdAt: timelineEntry.createdAt,
+          compaction: timelineEntry.compaction,
         });
         continue;
       }
@@ -233,6 +254,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
       if (!row) return 96;
       if (row.kind === "work") return 112;
       if (row.kind === "proposed-plan") return estimateTimelineProposedPlanHeight(row.proposedPlan);
+      if (row.kind === "compaction") return COMPACTION_ROW_ESTIMATED_HEIGHT_PX;
       if (row.kind === "working") return 40;
       return estimateTimelineMessageHeight(row.message, { timelineWidthPx });
     },
@@ -408,6 +430,14 @@ export const MessagesTimeline = memo(function MessagesTimeline({
           );
         })()}
 
+      {row.kind === "compaction" && (
+        <CompactionEventCard
+          compaction={row.compaction}
+          nowIso={nowIso}
+          timestampFormat={timestampFormat}
+        />
+      )}
+
       {row.kind === "message" &&
         row.message.role === "assistant" &&
         (() => {
@@ -518,9 +548,11 @@ export const MessagesTimeline = memo(function MessagesTimeline({
               <span className="h-1 w-1 rounded-full bg-muted-foreground/30 animate-pulse [animation-delay:400ms]" />
             </span>
             <span>
-              {row.createdAt
-                ? `Working for ${formatWorkingTimer(row.createdAt, nowIso) ?? "0s"}`
-                : "Working..."}
+              {formatWorkingStatus({
+                startedAt: row.createdAt,
+                nowIso,
+                compactionStartedAt: activeCompaction?.startedAt,
+              })}
             </span>
           </div>
         </div>
@@ -575,6 +607,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
 type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
 type TimelineMessage = Extract<TimelineEntry, { kind: "message" }>["message"];
 type TimelineProposedPlan = Extract<TimelineEntry, { kind: "proposed-plan" }>["proposedPlan"];
+type TimelineCompaction = Extract<TimelineEntry, { kind: "compaction" }>["compaction"];
 type TimelineWorkEntry = Extract<TimelineEntry, { kind: "work" }>["entry"];
 type TimelineRow =
   | {
@@ -596,6 +629,12 @@ type TimelineRow =
       id: string;
       createdAt: string;
       proposedPlan: TimelineProposedPlan;
+    }
+  | {
+      kind: "compaction";
+      id: string;
+      createdAt: string;
+      compaction: TimelineCompaction;
     }
   | { kind: "working"; id: string; createdAt: string | null };
 
@@ -635,6 +674,102 @@ function formatMessageMeta(
   if (!duration) return formatTimestamp(createdAt, timestampFormat);
   return `${formatTimestamp(createdAt, timestampFormat)} • ${duration}`;
 }
+
+function formatWorkingStatus(input: {
+  startedAt: string | null;
+  nowIso: string;
+  compactionStartedAt: string | undefined;
+}): string {
+  const workingElapsed = input.startedAt ? formatWorkingTimer(input.startedAt, input.nowIso) : null;
+  const compactionElapsed = input.compactionStartedAt
+    ? formatWorkingTimer(input.compactionStartedAt, input.nowIso)
+    : null;
+
+  if (compactionElapsed && workingElapsed) {
+    return `Compacting for ${compactionElapsed} • Working for ${workingElapsed}`;
+  }
+  if (compactionElapsed) {
+    return `Compacting for ${compactionElapsed}`;
+  }
+  if (workingElapsed) {
+    return `Working for ${workingElapsed}`;
+  }
+  return "Working...";
+}
+
+const CompactionEventCard = memo(function CompactionEventCard(props: {
+  compaction: TimelineCompaction;
+  nowIso: string;
+  timestampFormat: TimestampFormat;
+}) {
+  const { compaction, nowIso, timestampFormat } = props;
+  const elapsed =
+    compaction.status === "completed"
+      ? formatElapsed(compaction.startedAt, compaction.completedAt)
+      : formatElapsed(compaction.startedAt, nowIso);
+  const statusLabel =
+    compaction.status === "completed"
+      ? elapsed
+        ? `Completed in ${elapsed}`
+        : "Completed"
+      : elapsed
+        ? `Running for ${elapsed}`
+        : "Compacting";
+  const timestampLabel =
+    compaction.status === "completed"
+      ? formatMessageMeta(compaction.createdAt, elapsed, timestampFormat)
+      : formatTimestamp(compaction.createdAt, timestampFormat);
+  const isCompleted = compaction.status === "completed";
+  const cardClassName = isCompleted
+    ? "rounded-2xl border border-border/45 bg-transparent px-3.5 py-3"
+    : "rounded-2xl border border-amber-500/30 bg-amber-500/6 px-3.5 py-3";
+  const iconClassName = isCompleted
+    ? "border-border/50 bg-transparent text-foreground/70"
+    : "border-amber-500/25 bg-amber-500/10 text-amber-700 dark:text-amber-300";
+  const statusClassName = isCompleted
+    ? "text-muted-foreground/70"
+    : "text-amber-700/80 dark:text-amber-300/80";
+
+  return (
+    <div className="min-w-0 px-1 py-0.5">
+      <div className={cardClassName}>
+        <div className="flex items-start gap-3">
+          <span
+            className={cn(
+              "flex size-8 shrink-0 items-center justify-center rounded-full border",
+              iconClassName,
+            )}
+          >
+            <BotIcon className="size-4" />
+          </span>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center justify-between gap-3">
+              <p className="text-[15px] font-medium text-foreground/90">
+                {compaction.status === "completed" ? "Context compacted" : "Compacting context"}
+              </p>
+              {!isCompleted && (
+                <span
+                  className={cn(
+                    "shrink-0 text-[10px] uppercase tracking-[0.12em]",
+                    statusClassName,
+                  )}
+                >
+                  {statusLabel}
+                </span>
+              )}
+            </div>
+            {compaction.detail && (
+              <p className="mt-1 text-sm leading-relaxed text-muted-foreground/75">
+                {compaction.detail}
+              </p>
+            )}
+            <p className="mt-1.5 text-[10px] text-muted-foreground/35">{timestampLabel}</p>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
 
 function workToneIcon(tone: TimelineWorkEntry["tone"]): {
   icon: LucideIcon;

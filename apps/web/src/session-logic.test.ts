@@ -2,6 +2,7 @@ import { EventId, MessageId, TurnId, type OrchestrationThreadActivity } from "@t
 import { describe, expect, it } from "vitest";
 
 import {
+  deriveCompactionEntries,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
   PROVIDER_OPTIONS,
@@ -377,6 +378,13 @@ describe("deriveWorkLogEntries", () => {
     const activities: OrchestrationThreadActivity[] = [
       makeActivity({ id: "turn-1", turnId: "turn-1", summary: "Tool call", kind: "tool.started" }),
       makeActivity({
+        id: "compaction-no-turn",
+        createdAt: "2026-02-23T00:00:01.500Z",
+        kind: "compaction.completed",
+        summary: "Context compacted",
+        tone: "info",
+      }),
+      makeActivity({
         id: "turn-2",
         turnId: "turn-2",
         summary: "Tool call complete",
@@ -387,6 +395,34 @@ describe("deriveWorkLogEntries", () => {
 
     const entries = deriveWorkLogEntries(activities, TurnId.makeUnsafe("turn-2"));
     expect(entries.map((entry) => entry.id)).toEqual(["turn-2"]);
+  });
+
+  it("omits compaction lifecycle entries from the work log", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "compaction-start",
+        kind: "compaction.started",
+        summary: "Compacting context",
+        tone: "info",
+      }),
+      makeActivity({
+        id: "compaction-complete",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "compaction.completed",
+        summary: "Context compacted",
+        tone: "info",
+      }),
+      makeActivity({
+        id: "tool-complete",
+        createdAt: "2026-02-23T00:00:03.000Z",
+        summary: "Ran command",
+        tone: "tool",
+        kind: "tool.completed",
+      }),
+    ];
+
+    const entries = deriveWorkLogEntries(activities, undefined);
+    expect(entries.map((entry) => entry.id)).toEqual(["tool-complete"]);
   });
 
   it("omits checkpoint captured info entries", () => {
@@ -514,8 +550,91 @@ describe("deriveWorkLogEntries", () => {
   });
 });
 
+describe("deriveCompactionEntries", () => {
+  it("tracks an in-progress compaction until a completion arrives", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "compaction-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "compaction.started",
+        summary: "Compacting context",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          detail: "Summarizing the thread",
+        },
+      }),
+    ];
+
+    expect(deriveCompactionEntries(activities)).toEqual([
+      {
+        id: "compaction-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        startedAt: "2026-02-23T00:00:01.000Z",
+        turnId: "turn-1",
+        status: "inProgress",
+        detail: "Summarizing the thread",
+      },
+    ]);
+  });
+
+  it("closes the latest open compaction entry when completion arrives", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "compaction-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        kind: "compaction.started",
+        summary: "Compacting context",
+        tone: "info",
+        turnId: "turn-1",
+      }),
+      makeActivity({
+        id: "compaction-complete",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "compaction.completed",
+        summary: "Context compacted",
+        tone: "info",
+      }),
+    ];
+
+    expect(deriveCompactionEntries(activities)).toEqual([
+      {
+        id: "compaction-start",
+        createdAt: "2026-02-23T00:00:01.000Z",
+        startedAt: "2026-02-23T00:00:01.000Z",
+        completedAt: "2026-02-23T00:00:04.000Z",
+        turnId: "turn-1",
+        status: "completed",
+      },
+    ]);
+  });
+
+  it("creates a completed-only entry when no start event was observed", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "compaction-complete",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "compaction.completed",
+        summary: "Context compacted",
+        tone: "info",
+      }),
+    ];
+
+    expect(deriveCompactionEntries(activities)).toEqual([
+      {
+        id: "compaction-complete",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        startedAt: "2026-02-23T00:00:04.000Z",
+        completedAt: "2026-02-23T00:00:04.000Z",
+        turnId: null,
+        status: "completed",
+      },
+    ]);
+  });
+});
+
 describe("deriveTimelineEntries", () => {
-  it("includes proposed plans alongside messages and work entries in chronological order", () => {
+  it("includes proposed plans, compaction entries, and work entries in chronological order", () => {
     const entries = deriveTimelineEntries(
       [
         {
@@ -537,6 +656,16 @@ describe("deriveTimelineEntries", () => {
       ],
       [
         {
+          id: "compaction-1",
+          createdAt: "2026-02-23T00:00:02.500Z",
+          startedAt: "2026-02-23T00:00:02.500Z",
+          completedAt: "2026-02-23T00:00:04.000Z",
+          turnId: TurnId.makeUnsafe("turn-1"),
+          status: "completed",
+        },
+      ],
+      [
+        {
           id: "work-1",
           createdAt: "2026-02-23T00:00:03.000Z",
           label: "Ran tests",
@@ -545,11 +674,22 @@ describe("deriveTimelineEntries", () => {
       ],
     );
 
-    expect(entries.map((entry) => entry.kind)).toEqual(["message", "proposed-plan", "work"]);
+    expect(entries.map((entry) => entry.kind)).toEqual([
+      "message",
+      "proposed-plan",
+      "compaction",
+      "work",
+    ]);
     expect(entries[1]).toMatchObject({
       kind: "proposed-plan",
       proposedPlan: {
         planMarkdown: "# Ship it",
+      },
+    });
+    expect(entries[2]).toMatchObject({
+      kind: "compaction",
+      compaction: {
+        status: "completed",
       },
     });
   });

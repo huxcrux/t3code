@@ -278,6 +278,26 @@ function runtimeEventToActivities(
       ];
     }
 
+    case "thread.state.changed": {
+      if (event.payload.state !== "compacted") {
+        return [];
+      }
+      return [
+        {
+          id: event.eventId,
+          createdAt: event.createdAt,
+          tone: "info",
+          kind: "compaction.completed",
+          summary: "Context compacted",
+          payload: {
+            state: event.payload.state,
+          },
+          turnId: toTurnId(event.turnId) ?? null,
+          ...maybeSequence,
+        },
+      ];
+    }
+
     case "turn.plan.updated": {
       return [
         {
@@ -429,6 +449,23 @@ function runtimeEventToActivities(
     }
 
     case "item.completed": {
+      if (event.payload.itemType === "context_compaction") {
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: "info",
+            kind: "compaction.completed",
+            summary: "Context compacted",
+            payload: {
+              itemType: event.payload.itemType,
+              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            },
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }
@@ -450,6 +487,23 @@ function runtimeEventToActivities(
     }
 
     case "item.started": {
+      if (event.payload.itemType === "context_compaction") {
+        return [
+          {
+            id: event.eventId,
+            createdAt: event.createdAt,
+            tone: "info",
+            kind: "compaction.started",
+            summary: "Compacting context",
+            payload: {
+              itemType: event.payload.itemType,
+              ...(event.payload.detail ? { detail: truncateDetail(event.payload.detail) } : {}),
+            },
+            turnId: toTurnId(event.turnId) ?? null,
+            ...maybeSequence,
+          },
+        ];
+      }
       if (!isToolLifecycleItemType(event.payload.itemType)) {
         return [];
       }

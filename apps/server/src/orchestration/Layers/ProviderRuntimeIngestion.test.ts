@@ -1193,6 +1193,65 @@ describe("ProviderRuntimeIngestion", () => {
     ).toBe(true);
   });
 
+  it("maps context compaction lifecycle into dedicated activities", async () => {
+    const harness = await createHarness();
+    const startedAt = new Date().toISOString();
+    const completedAt = new Date(Date.parse(startedAt) + 2_500).toISOString();
+
+    harness.emit({
+      type: "item.started",
+      eventId: asEventId("evt-compaction-started"),
+      provider: "codex",
+      createdAt: startedAt,
+      threadId: asThreadId("thread-1"),
+      turnId: asTurnId("turn-compact"),
+      payload: {
+        itemType: "context_compaction",
+        detail: "Summarizing conversation state",
+      },
+    });
+    harness.emit({
+      type: "thread.state.changed",
+      eventId: asEventId("evt-compaction-completed"),
+      provider: "codex",
+      createdAt: completedAt,
+      threadId: asThreadId("thread-1"),
+      payload: {
+        state: "compacted",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.engine,
+      (entry) =>
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "compaction.started",
+        ) &&
+        entry.activities.some(
+          (activity: ProviderRuntimeTestActivity) => activity.kind === "compaction.completed",
+        ),
+    );
+
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "compaction.started",
+      ),
+    ).toMatchObject({
+      summary: "Compacting context",
+      turnId: "turn-compact",
+      payload: {
+        detail: "Summarizing conversation state",
+      },
+    });
+    expect(
+      thread.activities.find(
+        (activity: ProviderRuntimeTestActivity) => activity.kind === "compaction.completed",
+      ),
+    ).toMatchObject({
+      summary: "Context compacted",
+    });
+  });
+
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();
