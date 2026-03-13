@@ -6,6 +6,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useProjectNavigation } from "../hooks/useProjectNavigation";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { isTerminalFocused } from "../lib/terminalFocus";
 import { getTerminalStatusIndicator, getThreadStatusPill } from "../lib/threadStatus";
 import { useStore } from "../store";
 import { derivePendingApprovals } from "../session-logic";
@@ -14,13 +15,6 @@ import { ProjectPickerDialog } from "./ProjectPickerDialog";
 import { type ProjectPickerThreadSearchEntry } from "../lib/projectPickerSearch";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
-
-function isTerminalFocused(): boolean {
-  const activeElement = document.activeElement;
-  if (!(activeElement instanceof HTMLElement)) return false;
-  if (activeElement.classList.contains("xterm-helper-textarea")) return true;
-  return activeElement.closest(".thread-terminal-drawer .xterm") !== null;
-}
 
 export function ChatShellProjectPicker() {
   const projects = useStore((store) => store.projects);

@@ -225,9 +225,9 @@ describe("searchProjectPickerResults", () => {
       query: "alpha",
     });
 
-    expect(results.items.map((item) => item.key)).toEqual([
-      "project:project-1",
-      "thread:thread-1",
+    expect(results.projects.map((entry) => entry.id)).toEqual([ProjectId.makeUnsafe("project-1")]);
+    expect(results.threads.map((entry) => entry.thread.id)).toEqual([
+      ThreadId.makeUnsafe("thread-1"),
     ]);
   });
 });

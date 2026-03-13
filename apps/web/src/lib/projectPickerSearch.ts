@@ -177,31 +177,9 @@ export function searchProjectPickerResults(input: {
 }): {
   projects: Project[];
   threads: ProjectPickerThreadSearchEntry[];
-  items: ProjectPickerSearchResult[];
 } {
-  const projects = searchProjects(input.projects, input.query);
-  const threads = searchThreads(input.threads, input.query);
   return {
-    projects,
-    threads,
-    items: [
-      ...projects.map(
-        (project) =>
-          ({
-            type: "project",
-            key: `project:${project.id}`,
-            project,
-          }) satisfies ProjectPickerSearchResult,
-      ),
-      ...threads.map(
-        (entry) =>
-          ({
-            type: "thread",
-            key: `thread:${entry.thread.id}`,
-            thread: entry.thread,
-            project: entry.project,
-          }) satisfies ProjectPickerSearchResult,
-      ),
-    ],
+    projects: searchProjects(input.projects, input.query),
+    threads: searchThreads(input.threads, input.query),
   };
 }
