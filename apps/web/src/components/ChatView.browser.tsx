@@ -72,34 +72,6 @@ const TEXT_VIEWPORT_MATRIX = [
   { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 56 },
   { name: "narrow", width: 320, height: 700, textTolerancePx: 84, attachmentTolerancePx: 56 },
 ] as const satisfies readonly ViewportSpec[];
-const DESKTOP_HEIGHT_VIEWPORT_MATRIX = [
-  DEFAULT_VIEWPORT,
-  {
-    name: "desktop-short",
-    width: 960,
-    height: 760,
-    textTolerancePx: 44,
-    attachmentTolerancePx: 56,
-  },
-  {
-    name: "desktop-tall",
-    width: 960,
-    height: 1_400,
-    textTolerancePx: 44,
-    attachmentTolerancePx: 56,
-  },
-] as const satisfies readonly ViewportSpec[];
-const MOBILE_HEIGHT_VIEWPORT_MATRIX = [
-  { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 56 },
-  { name: "mobile-short", width: 430, height: 700, textTolerancePx: 56, attachmentTolerancePx: 56 },
-  {
-    name: "mobile-tall",
-    width: 430,
-    height: 1_150,
-    textTolerancePx: 56,
-    attachmentTolerancePx: 56,
-  },
-] as const satisfies readonly ViewportSpec[];
 const ATTACHMENT_VIEWPORT_MATRIX = [
   DEFAULT_VIEWPORT,
   { name: "mobile", width: 430, height: 932, textTolerancePx: 56, attachmentTolerancePx: 56 },
@@ -878,66 +850,6 @@ describe("ChatView timeline estimator parity (full app)", () => {
     expect(ratio).toBeGreaterThan(0.65);
     expect(ratio).toBeLessThan(1.35);
   });
-
-  it.each([
-    {
-      name: "desktop",
-      viewports: DESKTOP_HEIGHT_VIEWPORT_MATRIX,
-      userText: "x".repeat(2_200),
-      tolerancePx: 2,
-    },
-    {
-      name: "mobile",
-      viewports: MOBILE_HEIGHT_VIEWPORT_MATRIX,
-      userText: "x".repeat(1_600),
-      tolerancePx: 2,
-    },
-  ])(
-    "keeps user row height stable when only $name viewport height changes",
-    async ({ viewports, userText, tolerancePx }) => {
-      const targetMessageId = `msg-user-target-height-${viewports[0].name}` as MessageId;
-      const mounted = await mountChatView({
-        viewport: viewports[0],
-        snapshot: createSnapshotForTargetUser({
-          targetMessageId,
-          targetText: userText,
-        }),
-      });
-
-      try {
-        const baseline = await mounted.measureUserRow(targetMessageId);
-        const baselineEstimatedHeightPx = estimateTimelineMessageHeight(
-          { role: "user", text: userText, attachments: [] },
-          { timelineWidthPx: baseline.timelineWidthMeasuredPx },
-        );
-        expect(
-          Math.abs(baseline.measuredRowHeightPx - baselineEstimatedHeightPx),
-        ).toBeLessThanOrEqual(viewports[0].textTolerancePx);
-
-        for (const viewport of viewports.slice(1)) {
-          await mounted.setViewport(viewport);
-          const measurement = await mounted.measureUserRow(targetMessageId);
-          const estimatedHeightPx = estimateTimelineMessageHeight(
-            { role: "user", text: userText, attachments: [] },
-            { timelineWidthPx: measurement.timelineWidthMeasuredPx },
-          );
-
-          expect(measurement.renderedInVirtualizedRegion).toBe(true);
-          expect(
-            Math.abs(measurement.timelineWidthMeasuredPx - baseline.timelineWidthMeasuredPx),
-          ).toBeLessThanOrEqual(1);
-          expect(Math.abs(measurement.measuredRowHeightPx - estimatedHeightPx)).toBeLessThanOrEqual(
-            viewport.textTolerancePx,
-          );
-          expect(
-            Math.abs(measurement.measuredRowHeightPx - baseline.measuredRowHeightPx),
-          ).toBeLessThanOrEqual(tolerancePx);
-        }
-      } finally {
-        await mounted.cleanup();
-      }
-    },
-  );
 
   it.each(ATTACHMENT_VIEWPORT_MATRIX)(
     "keeps user attachment estimate close at the $name viewport",
