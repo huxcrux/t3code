@@ -9,8 +9,11 @@ import {
   derivePendingUserInputs,
   deriveTimelineEntries,
   deriveWorkLogEntries,
+  findProposedPlanImplementedByLatestUserMessage,
   findLatestProposedPlan,
   hasToolActivityForTurn,
+  isPlanImplementationInProgress,
+  isPlanRefinementInProgress,
   isLatestTurnSettled,
 } from "./session-logic";
 
@@ -320,6 +323,183 @@ describe("findLatestProposedPlan", () => {
     );
 
     expect(latestPlan?.planMarkdown).toBe("# Latest");
+  });
+});
+
+describe("isPlanRefinementInProgress", () => {
+  const proposedPlans = [
+    {
+      id: "plan:thread-1:turn:turn-1",
+      turnId: TurnId.makeUnsafe("turn-1"),
+      planMarkdown: "# Initial plan",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      updatedAt: "2026-02-23T00:00:02.000Z",
+    },
+  ];
+
+  it("returns true while a newer plan turn is running after a settled plan exists", () => {
+    expect(
+      isPlanRefinementInProgress({
+        interactionMode: "plan",
+        latestTurnId: TurnId.makeUnsafe("turn-2"),
+        latestTurnSettled: false,
+        proposedPlans,
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false once the latest turn settles", () => {
+    expect(
+      isPlanRefinementInProgress({
+        interactionMode: "plan",
+        latestTurnId: TurnId.makeUnsafe("turn-2"),
+        latestTurnSettled: true,
+        proposedPlans,
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false when the thread is implementing instead of refining", () => {
+    expect(
+      isPlanRefinementInProgress({
+        interactionMode: "default",
+        latestTurnId: TurnId.makeUnsafe("turn-2"),
+        latestTurnSettled: false,
+        proposedPlans,
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("isPlanImplementationInProgress", () => {
+  it("returns true while a plan implementation turn is running without live steps yet", () => {
+    expect(
+      isPlanImplementationInProgress({
+        activities: [],
+        interactionMode: "default",
+        latestTurnId: TurnId.makeUnsafe("turn-implement-1"),
+        latestTurnSettled: false,
+        messages: [
+          {
+            role: "user",
+            text: "PLEASE IMPLEMENT THIS PLAN:\n# Final plan",
+            createdAt: "2026-02-23T00:00:03.000Z",
+          },
+        ],
+        proposedPlans: [
+          {
+            id: "plan:thread-1:turn:turn-plan-2",
+            turnId: TurnId.makeUnsafe("turn-plan-2"),
+            planMarkdown: "# Final plan",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            updatedAt: "2026-02-23T00:00:02.000Z",
+          },
+        ],
+      }),
+    ).toBe(true);
+  });
+
+  it("returns false once live implementation steps exist", () => {
+    expect(
+      isPlanImplementationInProgress({
+        activities: [
+          makeActivity({
+            id: "implementation-plan",
+            createdAt: "2026-02-23T00:00:03.000Z",
+            kind: "turn.plan.updated",
+            summary: "Plan updated",
+            tone: "info",
+            turnId: "turn-implement-1",
+            payload: {
+              explanation: "Executing the plan",
+              plan: [{ step: "Update the running sidebar", status: "inProgress" }],
+            },
+          }),
+        ],
+        interactionMode: "default",
+        latestTurnId: TurnId.makeUnsafe("turn-implement-1"),
+        latestTurnSettled: false,
+        messages: [
+          {
+            role: "user",
+            text: "PLEASE IMPLEMENT THIS PLAN:\n# Final plan",
+            createdAt: "2026-02-23T00:00:03.000Z",
+          },
+        ],
+        proposedPlans: [
+          {
+            id: "plan:thread-1:turn:turn-plan-2",
+            turnId: TurnId.makeUnsafe("turn-plan-2"),
+            planMarkdown: "# Final plan",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            updatedAt: "2026-02-23T00:00:02.000Z",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+
+  it("returns false while plan refinement is running", () => {
+    expect(
+      isPlanImplementationInProgress({
+        activities: [],
+        interactionMode: "plan",
+        latestTurnId: TurnId.makeUnsafe("turn-plan-3"),
+        latestTurnSettled: false,
+        messages: [
+          {
+            role: "user",
+            text: "PLEASE IMPLEMENT THIS PLAN:\n# Final plan",
+            createdAt: "2026-02-23T00:00:03.000Z",
+          },
+        ],
+        proposedPlans: [
+          {
+            id: "plan:thread-1:turn:turn-plan-2",
+            turnId: TurnId.makeUnsafe("turn-plan-2"),
+            planMarkdown: "# Final plan",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            updatedAt: "2026-02-23T00:00:02.000Z",
+          },
+        ],
+      }),
+    ).toBe(false);
+  });
+});
+
+describe("findProposedPlanImplementedByLatestUserMessage", () => {
+  it("matches the latest implementation prompt back to its proposed plan", () => {
+    expect(
+      findProposedPlanImplementedByLatestUserMessage(
+        [
+          {
+            role: "user",
+            text: "other message",
+            createdAt: "2026-02-23T00:00:01.000Z",
+          },
+          {
+            role: "user",
+            text: "PLEASE IMPLEMENT THIS PLAN:\n# Final plan",
+            createdAt: "2026-02-23T00:00:03.000Z",
+          },
+        ],
+        [
+          {
+            id: "plan:thread-1:turn:turn-plan-2",
+            turnId: TurnId.makeUnsafe("turn-plan-2"),
+            planMarkdown: "# Final plan",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            updatedAt: "2026-02-23T00:00:02.000Z",
+          },
+        ],
+      ),
+    ).toEqual({
+      id: "plan:thread-1:turn:turn-plan-2",
+      turnId: "turn-plan-2",
+      planMarkdown: "# Final plan",
+      createdAt: "2026-02-23T00:00:01.000Z",
+      updatedAt: "2026-02-23T00:00:02.000Z",
+    });
   });
 });
 

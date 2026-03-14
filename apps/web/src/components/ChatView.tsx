@@ -53,9 +53,12 @@ import {
   deriveTimelineEntries,
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  findProposedPlanImplementedByLatestUserMessage,
   findLatestProposedPlan,
   deriveWorkLogEntries,
   hasToolActivityForTurn,
+  isPlanImplementationInProgress,
+  isPlanRefinementInProgress,
   isLatestTurnSettled,
   formatElapsed,
 } from "../session-logic";
@@ -85,6 +88,7 @@ import {
 import { basenameOfPath } from "../vscode-icons";
 import { useTheme } from "../hooks/useTheme";
 import { useTurnDiffSummaries } from "../hooks/useTurnDiffSummaries";
+import { getComposerSurfaceClassName } from "../composerSurface";
 import BranchToolbar from "./BranchToolbar";
 import { resolveShortcutCommand, shortcutLabelForCommand } from "../keybindings";
 import PlanSidebar from "./PlanSidebar";
@@ -622,6 +626,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
         : null,
     [activePendingDraftAnswers, activePendingUserInput],
   );
+  const planStateMessages = useMemo(
+    () =>
+      [...(activeThread?.messages ?? []), ...optimisticUserMessages].toSorted((left, right) =>
+        left.createdAt.localeCompare(right.createdAt),
+      ),
+    [activeThread?.messages, optimisticUserMessages],
+  );
   const activePendingIsResponding = activePendingUserInput
     ? respondingUserInputRequestIds.includes(activePendingUserInput.requestId)
     : false;
@@ -629,14 +640,54 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (!latestTurnSettled) {
       return null;
     }
+    if (interactionMode === "default") {
+      return null;
+    }
     return findLatestProposedPlan(
       activeThread?.proposedPlans ?? [],
       activeLatestTurn?.turnId ?? null,
     );
-  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, latestTurnSettled]);
+  }, [activeLatestTurn?.turnId, activeThread?.proposedPlans, interactionMode, latestTurnSettled]);
   const activePlan = useMemo(
     () => deriveActivePlanState(threadActivities, activeLatestTurn?.turnId ?? undefined),
     [activeLatestTurn?.turnId, threadActivities],
+  );
+  const implementedProposedPlan = useMemo(
+    () =>
+      findProposedPlanImplementedByLatestUserMessage(
+        planStateMessages,
+        activeThread?.proposedPlans ?? [],
+      ),
+    [activeThread?.proposedPlans, planStateMessages],
+  );
+  const planRefinementInProgress = useMemo(
+    () =>
+      isPlanRefinementInProgress({
+        interactionMode,
+        latestTurnId: activeLatestTurn?.turnId ?? null,
+        latestTurnSettled,
+        proposedPlans: activeThread?.proposedPlans ?? [],
+      }),
+    [activeLatestTurn?.turnId, activeThread?.proposedPlans, interactionMode, latestTurnSettled],
+  );
+  const planImplementationInProgress = useMemo(
+    () =>
+      isPlanImplementationInProgress({
+        activities: threadActivities,
+        interactionMode,
+        latestTurnId: activeLatestTurn?.turnId ?? null,
+        latestTurnSettled,
+        proposedPlans: activeThread?.proposedPlans ?? [],
+        messages: planStateMessages,
+      }),
+    [
+      activeLatestTurn?.turnId,
+      activeThread?.proposedPlans,
+      interactionMode,
+      latestTurnSettled,
+      planStateMessages,
+      threadActivities,
+    ],
   );
   const showPlanFollowUpPrompt =
     pendingUserInputs.length === 0 &&
@@ -3309,9 +3360,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
               data-chat-composer-form="true"
             >
               <div
-                className={`group rounded-[20px] border bg-card transition-colors duration-200 focus-within:border-ring/45 ${
-                  isDragOverComposer ? "border-primary/70 bg-accent/30" : "border-border"
-                }`}
+                className={getComposerSurfaceClassName(
+                  settings.composerSurfaceIntensity,
+                  isDragOverComposer,
+                )}
                 onDragEnter={onComposerDragEnter}
                 onDragOver={onComposerDragOver}
                 onDragLeave={onComposerDragLeave}
@@ -3814,6 +3866,13 @@ export default function ChatView({ threadId }: ChatViewProps) {
           <PlanSidebar
             activePlan={activePlan}
             activeProposedPlan={activeProposedPlan}
+            isImplementingPlan={planImplementationInProgress}
+            isRefiningPlan={planRefinementInProgress}
+            implementedPlanTitle={
+              planImplementationInProgress && implementedProposedPlan
+                ? proposedPlanTitle(implementedProposedPlan.planMarkdown)
+                : null
+            }
             markdownCwd={gitCwd ?? undefined}
             workspaceRoot={activeProject?.cwd ?? undefined}
             timestampFormat={timestampFormat}

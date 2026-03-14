@@ -53,6 +53,9 @@ function stepStatusIcon(status: string): React.ReactNode {
 interface PlanSidebarProps {
   activePlan: ActivePlanState | null;
   activeProposedPlan: LatestProposedPlanState | null;
+  implementedPlanTitle: string | null;
+  isImplementingPlan: boolean;
+  isRefiningPlan: boolean;
   markdownCwd: string | undefined;
   workspaceRoot: string | undefined;
   timestampFormat: TimestampFormat;
@@ -62,6 +65,9 @@ interface PlanSidebarProps {
 const PlanSidebar = memo(function PlanSidebar({
   activePlan,
   activeProposedPlan,
+  implementedPlanTitle,
+  isImplementingPlan,
+  isRefiningPlan,
   markdownCwd,
   workspaceRoot,
   timestampFormat,
@@ -250,10 +256,30 @@ const PlanSidebar = memo(function PlanSidebar({
           {/* Empty state */}
           {!activePlan && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
-              <p className="mt-1 text-[11px] text-muted-foreground/30">
-                Plans will appear here when generated.
-              </p>
+              {isRefiningPlan ? (
+                <>
+                  <p className="text-[13px] text-muted-foreground/40">Refining plan...</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground/30">
+                    The previous plan is hidden until the updated plan is ready.
+                  </p>
+                </>
+              ) : isImplementingPlan ? (
+                <>
+                  <p className="text-[13px] text-muted-foreground/40">Implementing plan...</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground/30">
+                    {implementedPlanTitle
+                      ? `${implementedPlanTitle} is in progress. Live task steps will appear here if the agent publishes them.`
+                      : "Live task steps will appear here if the agent publishes them."}
+                  </p>
+                </>
+              ) : (
+                <>
+                  <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
+                  <p className="mt-1 text-[11px] text-muted-foreground/30">
+                    Plans will appear here when generated.
+                  </p>
+                </>
+              )}
             </div>
           ) : null}
         </div>
