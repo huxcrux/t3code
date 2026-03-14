@@ -1,4 +1,4 @@
-import { memo, useState, useCallback } from "react";
+import { memo, useState, useCallback, useEffect } from "react";
 import { type TimestampFormat } from "../appSettings";
 import { Badge } from "./ui/badge";
 import { Button } from "./ui/button";
@@ -67,13 +67,20 @@ const PlanSidebar = memo(function PlanSidebar({
   timestampFormat,
   onClose,
 }: PlanSidebarProps) {
-  const [proposedPlanExpanded, setProposedPlanExpanded] = useState(false);
+  const [proposedPlanExpanded, setProposedPlanExpanded] = useState(Boolean(activeProposedPlan));
   const [isSavingToWorkspace, setIsSavingToWorkspace] = useState(false);
   const { copyToClipboard, isCopied } = useCopyToClipboard();
 
   const planMarkdown = activeProposedPlan?.planMarkdown ?? null;
   const displayedPlanMarkdown = planMarkdown ? stripDisplayedPlanMarkdown(planMarkdown) : null;
   const planTitle = planMarkdown ? proposedPlanTitle(planMarkdown) : null;
+
+  useEffect(() => {
+    if (!activeProposedPlan) {
+      return;
+    }
+    setProposedPlanExpanded(true);
+  }, [activeProposedPlan]);
 
   const handleCopyPlan = useCallback(() => {
     if (!planMarkdown) return;
