@@ -17,7 +17,7 @@ import type {
   ThreadSession,
   TurnDiffSummary,
 } from "./types";
-import { buildPlanImplementationPrompt } from "./proposedPlan";
+import { buildPlanImplementationPrompt, proposedPlanTitle } from "./proposedPlan";
 
 export type ProviderPickerKind = ProviderKind | "claudeCode" | "cursor";
 
@@ -60,7 +60,9 @@ export interface PendingUserInput {
 export interface ActivePlanState {
   createdAt: string;
   turnId: TurnId | null;
+  kind: "steps" | "refining" | "implementing";
   explanation?: string | null;
+  detail?: string | null;
   steps: Array<{
     step: string;
     status: "pending" | "inProgress" | "completed";
@@ -355,10 +357,85 @@ export function deriveActivePlanState(
   return {
     createdAt: latest.createdAt,
     turnId: latest.turnId,
+    kind: "steps",
     ...(payload && "explanation" in payload
       ? { explanation: payload.explanation as string | null }
       : {}),
     steps,
+  };
+}
+
+export function deriveSidebarPlanState(input: {
+  activities: ReadonlyArray<OrchestrationThreadActivity>;
+  interactionMode: "default" | "plan";
+  latestTurnId: TurnId | undefined;
+  latestTurnStartedAt?: string | null;
+  latestTurnSettled: boolean;
+  proposedPlans: ReadonlyArray<ProposedPlan>;
+  messages: ReadonlyArray<Pick<ChatMessage, "role" | "text" | "createdAt">>;
+}): ActivePlanState | null {
+  const currentTurnPlan = deriveActivePlanState(input.activities, input.latestTurnId);
+  if (currentTurnPlan) {
+    return currentTurnPlan;
+  }
+
+  const latestSettledPlan = findLatestProposedPlan(input.proposedPlans, null);
+  const createdAt =
+    input.latestTurnStartedAt ??
+    latestSettledPlan?.updatedAt ??
+    input.messages.at(-1)?.createdAt ??
+    null;
+  if (!createdAt) {
+    return null;
+  }
+
+  if (
+    isPlanRefinementInProgress({
+      interactionMode: input.interactionMode,
+      latestTurnId: input.latestTurnId ?? null,
+      latestTurnSettled: input.latestTurnSettled,
+      proposedPlans: input.proposedPlans,
+    })
+  ) {
+    return {
+      createdAt,
+      turnId: input.latestTurnId ?? null,
+      kind: "refining",
+      explanation: "Refining plan...",
+      detail: "The previous plan is hidden until the updated plan is ready.",
+      steps: [],
+    };
+  }
+
+  const implementedPlan = findProposedPlanImplementedByLatestUserMessage(
+    input.messages,
+    input.proposedPlans,
+  );
+  if (
+    !isPlanImplementationInProgress({
+      activities: input.activities,
+      interactionMode: input.interactionMode,
+      latestTurnId: input.latestTurnId ?? null,
+      latestTurnSettled: input.latestTurnSettled,
+      proposedPlans: input.proposedPlans,
+      messages: input.messages,
+    })
+  ) {
+    return null;
+  }
+
+  const implementedPlanTitle = implementedPlan
+    ? proposedPlanTitle(implementedPlan.planMarkdown)
+    : null;
+  return {
+    createdAt,
+    turnId: input.latestTurnId ?? null,
+    kind: "implementing",
+    explanation: "Implementing plan...",
+    detail: implementedPlanTitle
+      ? `${implementedPlanTitle} is in progress. Live task steps will appear here if the agent publishes them.`
+      : "Live task steps will appear here if the agent publishes them.",
+    steps: [],
   };
 }
 

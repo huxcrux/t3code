@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import {
   deriveActiveWorkStartedAt,
   deriveActivePlanState,
+  deriveSidebarPlanState,
   PROVIDER_OPTIONS,
   derivePendingApprovals,
   derivePendingUserInputs,
@@ -257,8 +258,111 @@ describe("deriveActivePlanState", () => {
     expect(deriveActivePlanState(activities, TurnId.makeUnsafe("turn-1"))).toEqual({
       createdAt: "2026-02-23T00:00:02.000Z",
       turnId: "turn-1",
+      kind: "steps",
       explanation: "Refined plan",
       steps: [{ step: "Implement Codex user input", status: "inProgress" }],
+    });
+  });
+});
+
+describe("deriveSidebarPlanState", () => {
+  it("returns live plan steps when the active turn has them", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-latest",
+        createdAt: "2026-02-23T00:00:02.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-1",
+        payload: {
+          explanation: "Refined plan",
+          plan: [{ step: "Implement Codex user input", status: "inProgress" }],
+        },
+      }),
+    ];
+
+    expect(
+      deriveSidebarPlanState({
+        activities,
+        interactionMode: "default",
+        latestTurnId: TurnId.makeUnsafe("turn-1"),
+        latestTurnStartedAt: "2026-02-23T00:00:01.000Z",
+        latestTurnSettled: false,
+        proposedPlans: [],
+        messages: [],
+      }),
+    ).toEqual({
+      createdAt: "2026-02-23T00:00:02.000Z",
+      turnId: "turn-1",
+      kind: "steps",
+      explanation: "Refined plan",
+      steps: [{ step: "Implement Codex user input", status: "inProgress" }],
+    });
+  });
+
+  it("returns refining state while a follow-up plan turn is running", () => {
+    expect(
+      deriveSidebarPlanState({
+        activities: [],
+        interactionMode: "plan",
+        latestTurnId: TurnId.makeUnsafe("turn-2"),
+        latestTurnStartedAt: "2026-02-23T00:00:03.000Z",
+        latestTurnSettled: false,
+        proposedPlans: [
+          {
+            id: "plan:thread-1:turn:turn-1",
+            turnId: TurnId.makeUnsafe("turn-1"),
+            planMarkdown: "# Initial plan",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            updatedAt: "2026-02-23T00:00:02.000Z",
+          },
+        ],
+        messages: [],
+      }),
+    ).toEqual({
+      createdAt: "2026-02-23T00:00:03.000Z",
+      turnId: "turn-2",
+      kind: "refining",
+      explanation: "Refining plan...",
+      detail: "The previous plan is hidden until the updated plan is ready.",
+      steps: [],
+    });
+  });
+
+  it("returns implementing state while the implementation turn is running without live steps", () => {
+    expect(
+      deriveSidebarPlanState({
+        activities: [],
+        interactionMode: "default",
+        latestTurnId: TurnId.makeUnsafe("turn-implement-1"),
+        latestTurnStartedAt: "2026-02-23T00:00:03.000Z",
+        latestTurnSettled: false,
+        proposedPlans: [
+          {
+            id: "plan:thread-1:turn:turn-plan-2",
+            turnId: TurnId.makeUnsafe("turn-plan-2"),
+            planMarkdown: "# Final plan",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            updatedAt: "2026-02-23T00:00:02.000Z",
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            text: "PLEASE IMPLEMENT THIS PLAN:\n# Final plan",
+            createdAt: "2026-02-23T00:00:03.000Z",
+          },
+        ],
+      }),
+    ).toEqual({
+      createdAt: "2026-02-23T00:00:03.000Z",
+      turnId: "turn-implement-1",
+      kind: "implementing",
+      explanation: "Implementing plan...",
+      detail:
+        "Final plan is in progress. Live task steps will appear here if the agent publishes them.",
+      steps: [],
     });
   });
 });

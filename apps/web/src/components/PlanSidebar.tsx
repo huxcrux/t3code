@@ -53,9 +53,6 @@ function stepStatusIcon(status: string): React.ReactNode {
 interface PlanSidebarProps {
   activePlan: ActivePlanState | null;
   activeProposedPlan: LatestProposedPlanState | null;
-  implementedPlanTitle: string | null;
-  isImplementingPlan: boolean;
-  isRefiningPlan: boolean;
   markdownCwd: string | undefined;
   workspaceRoot: string | undefined;
   timestampFormat: TimestampFormat;
@@ -65,9 +62,6 @@ interface PlanSidebarProps {
 const PlanSidebar = memo(function PlanSidebar({
   activePlan,
   activeProposedPlan,
-  implementedPlanTitle,
-  isImplementingPlan,
-  isRefiningPlan,
   markdownCwd,
   workspaceRoot,
   timestampFormat,
@@ -184,15 +178,13 @@ const PlanSidebar = memo(function PlanSidebar({
       {/* Content */}
       <ScrollArea className="min-h-0 flex-1">
         <div className="p-3 space-y-4">
-          {/* Explanation */}
-          {activePlan?.explanation ? (
+          {activePlan?.kind === "steps" && activePlan.explanation ? (
             <p className="text-[13px] leading-relaxed text-muted-foreground/80">
               {activePlan.explanation}
             </p>
           ) : null}
 
-          {/* Plan Steps */}
-          {activePlan && activePlan.steps.length > 0 ? (
+          {activePlan?.kind === "steps" && activePlan.steps.length > 0 ? (
             <div className="space-y-1">
               <p className="mb-2 text-[10px] font-semibold tracking-widest text-muted-foreground/40 uppercase">
                 Steps
@@ -221,6 +213,17 @@ const PlanSidebar = memo(function PlanSidebar({
                   </p>
                 </div>
               ))}
+            </div>
+          ) : null}
+
+          {activePlan && activePlan.kind !== "steps" ? (
+            <div className="flex flex-col items-center justify-center py-12 text-center">
+              {activePlan.explanation ? (
+                <p className="text-[13px] text-muted-foreground/40">{activePlan.explanation}</p>
+              ) : null}
+              {activePlan.detail ? (
+                <p className="mt-1 text-[11px] text-muted-foreground/30">{activePlan.detail}</p>
+              ) : null}
             </div>
           ) : null}
 
@@ -256,30 +259,10 @@ const PlanSidebar = memo(function PlanSidebar({
           {/* Empty state */}
           {!activePlan && !planMarkdown ? (
             <div className="flex flex-col items-center justify-center py-12 text-center">
-              {isRefiningPlan ? (
-                <>
-                  <p className="text-[13px] text-muted-foreground/40">Refining plan...</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground/30">
-                    The previous plan is hidden until the updated plan is ready.
-                  </p>
-                </>
-              ) : isImplementingPlan ? (
-                <>
-                  <p className="text-[13px] text-muted-foreground/40">Implementing plan...</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground/30">
-                    {implementedPlanTitle
-                      ? `${implementedPlanTitle} is in progress. Live task steps will appear here if the agent publishes them.`
-                      : "Live task steps will appear here if the agent publishes them."}
-                  </p>
-                </>
-              ) : (
-                <>
-                  <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
-                  <p className="mt-1 text-[11px] text-muted-foreground/30">
-                    Plans will appear here when generated.
-                  </p>
-                </>
-              )}
+              <p className="text-[13px] text-muted-foreground/40">No active plan yet.</p>
+              <p className="mt-1 text-[11px] text-muted-foreground/30">
+                Plans will appear here when generated.
+              </p>
             </div>
           ) : null}
         </div>
