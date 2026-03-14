@@ -375,7 +375,7 @@ export function deriveSidebarPlanState(input: {
   messages: ReadonlyArray<Pick<ChatMessage, "role" | "text" | "createdAt">>;
 }): ActivePlanState | null {
   const currentTurnPlan = deriveActivePlanState(input.activities, input.latestTurnId);
-  if (currentTurnPlan) {
+  if (currentTurnPlan && (input.interactionMode !== "default" || !input.latestTurnSettled)) {
     return currentTurnPlan;
   }
 

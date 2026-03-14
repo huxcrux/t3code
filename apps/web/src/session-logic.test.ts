@@ -362,6 +362,49 @@ describe("deriveSidebarPlanState", () => {
       steps: [],
     });
   });
+
+  it("returns null once an implementation turn settles even if the last live plan snapshot was still in progress", () => {
+    const activities: OrchestrationThreadActivity[] = [
+      makeActivity({
+        id: "plan-latest",
+        createdAt: "2026-02-23T00:00:04.000Z",
+        kind: "turn.plan.updated",
+        summary: "Plan updated",
+        tone: "info",
+        turnId: "turn-implement-1",
+        payload: {
+          explanation: "Executing the plan",
+          plan: [{ step: "Implement Codex user input", status: "inProgress" }],
+        },
+      }),
+    ];
+
+    expect(
+      deriveSidebarPlanState({
+        activities,
+        interactionMode: "default",
+        latestTurnId: TurnId.makeUnsafe("turn-implement-1"),
+        latestTurnStartedAt: "2026-02-23T00:00:03.000Z",
+        latestTurnSettled: true,
+        proposedPlans: [
+          {
+            id: "plan:thread-1:turn:turn-plan-2",
+            turnId: TurnId.makeUnsafe("turn-plan-2"),
+            planMarkdown: "# Final plan",
+            createdAt: "2026-02-23T00:00:01.000Z",
+            updatedAt: "2026-02-23T00:00:02.000Z",
+          },
+        ],
+        messages: [
+          {
+            role: "user",
+            text: "PLEASE IMPLEMENT THIS PLAN:\n# Final plan",
+            createdAt: "2026-02-23T00:00:03.000Z",
+          },
+        ],
+      }),
+    ).toBeNull();
+  });
 });
 
 describe("findLatestProposedPlan", () => {
