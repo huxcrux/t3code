@@ -389,14 +389,14 @@ export function deriveSidebarPlanState(input: {
     return null;
   }
 
-  if (
-    isPlanRefinementInProgress({
-      interactionMode: input.interactionMode,
-      latestTurnId: input.latestTurnId ?? null,
-      latestTurnSettled: input.latestTurnSettled,
-      proposedPlans: input.proposedPlans,
-    })
-  ) {
+  const isRefiningPlan =
+    input.interactionMode === "plan" &&
+    !input.latestTurnSettled &&
+    input.latestTurnId !== undefined &&
+    latestSettledPlan?.turnId !== undefined &&
+    latestSettledPlan.turnId !== input.latestTurnId;
+
+  if (isRefiningPlan) {
     return {
       createdAt,
       turnId: input.latestTurnId ?? null,
@@ -407,20 +407,15 @@ export function deriveSidebarPlanState(input: {
     };
   }
 
-  const implementedPlan = findProposedPlanImplementedByLatestUserMessage(
-    input.messages,
-    input.proposedPlans,
-  );
-  if (
-    !isPlanImplementationInProgress({
-      activities: input.activities,
-      interactionMode: input.interactionMode,
-      latestTurnId: input.latestTurnId ?? null,
-      latestTurnSettled: input.latestTurnSettled,
-      proposedPlans: input.proposedPlans,
-      messages: input.messages,
-    })
-  ) {
+  const implementedPlan = matchImplementedProposedPlan(input.messages, input.proposedPlans);
+  const isImplementingPlan =
+    input.interactionMode === "default" &&
+    !input.latestTurnSettled &&
+    input.latestTurnId !== undefined &&
+    implementedPlan?.turnId !== undefined &&
+    implementedPlan.turnId !== input.latestTurnId;
+
+  if (!isImplementingPlan) {
     return null;
   }
 
@@ -481,26 +476,7 @@ export function findLatestProposedPlan(
   };
 }
 
-export function isPlanRefinementInProgress(input: {
-  interactionMode: "default" | "plan";
-  latestTurnId: TurnId | string | null | undefined;
-  latestTurnSettled: boolean;
-  proposedPlans: ReadonlyArray<ProposedPlan>;
-}): boolean {
-  if (input.interactionMode !== "plan" || input.latestTurnSettled) {
-    return false;
-  }
-  if (!input.latestTurnId || input.proposedPlans.length === 0) {
-    return false;
-  }
-  const latestSettledPlan = findLatestProposedPlan(input.proposedPlans, null);
-  if (!latestSettledPlan?.turnId) {
-    return false;
-  }
-  return latestSettledPlan.turnId !== input.latestTurnId;
-}
-
-export function findProposedPlanImplementedByLatestUserMessage(
+function matchImplementedProposedPlan(
   messages: ReadonlyArray<Pick<ChatMessage, "role" | "text" | "createdAt">>,
   proposedPlans: ReadonlyArray<ProposedPlan>,
 ): LatestProposedPlanState | null {
@@ -531,30 +507,6 @@ export function findProposedPlanImplementedByLatestUserMessage(
     turnId: matchingPlan.turnId,
     planMarkdown: matchingPlan.planMarkdown,
   };
-}
-
-export function isPlanImplementationInProgress(input: {
-  activities: ReadonlyArray<OrchestrationThreadActivity>;
-  interactionMode: "default" | "plan";
-  latestTurnId: TurnId | string | null | undefined;
-  latestTurnSettled: boolean;
-  proposedPlans: ReadonlyArray<ProposedPlan>;
-  messages: ReadonlyArray<Pick<ChatMessage, "role" | "text" | "createdAt">>;
-}): boolean {
-  if (input.interactionMode !== "default" || input.latestTurnSettled || !input.latestTurnId) {
-    return false;
-  }
-  if (deriveActivePlanState(input.activities, input.latestTurnId as TurnId)) {
-    return false;
-  }
-  const implementedPlan = findProposedPlanImplementedByLatestUserMessage(
-    input.messages,
-    input.proposedPlans,
-  );
-  if (!implementedPlan?.turnId) {
-    return false;
-  }
-  return implementedPlan.turnId !== input.latestTurnId;
 }
 
 export function deriveWorkLogEntries(
