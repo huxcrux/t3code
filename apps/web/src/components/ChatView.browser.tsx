@@ -1141,6 +1141,63 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("opens the command palette from the configurable shortcut and runs a command", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-command-palette-shortcut-test" as MessageId,
+        targetText: "command palette shortcut test",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "commandPalette.toggle",
+              shortcut: {
+                key: "k",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      const useMetaForMod = isMacPlatform(navigator.platform);
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "k",
+          metaKey: useMetaForMod,
+          ctrlKey: !useMetaForMod,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      await expect.element(page.getByTestId("command-palette")).toBeInTheDocument();
+      await expect.element(page.getByText("New thread")).toBeInTheDocument();
+      await page.getByText("New thread").click();
+
+      await waitForURL(
+        mounted.router,
+        (path) => UUID_ROUTE_RE.test(path),
+        "Route should have changed to a new draft thread UUID from the command palette.",
+      );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("creates a fresh draft after the previous draft thread is promoted", async () => {
     const mounted = await mountChatView({
       viewport: DEFAULT_VIEWPORT,

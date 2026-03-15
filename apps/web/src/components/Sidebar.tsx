@@ -5,6 +5,7 @@ import {
   GitPullRequestIcon,
   PlusIcon,
   RocketIcon,
+  SearchIcon,
   SettingsIcon,
   SquarePenIcon,
   TerminalIcon,
@@ -50,6 +51,7 @@ import { useComposerDraftStore } from "../composerDraftStore";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import { selectThreadTerminalState, useTerminalStateStore } from "../terminalStateStore";
 import { toastManager } from "./ui/toast";
+import { Kbd } from "./ui/kbd";
 import {
   getArm64IntelBuildWarningDescription,
   getDesktopUpdateActionError,
@@ -90,6 +92,7 @@ import {
   shouldClearThreadSelectionOnMouseDown,
 } from "./Sidebar.logic";
 import { useCopyToClipboard } from "~/hooks/useCopyToClipboard";
+import { CommandDialogTrigger } from "./ui/command";
 
 const EMPTY_KEYBINDINGS: ResolvedKeybindingsConfig = [];
 const THREAD_PREVIEW_LIMIT = 6;
@@ -1029,6 +1032,10 @@ export default function Sidebar() {
       shortcutLabelForCommand(keybindings, "chat.new"),
     [keybindings],
   );
+  const commandPaletteShortcutLabel = useMemo(
+    () => shortcutLabelForCommand(keybindings, "commandPalette.toggle"),
+    [keybindings],
+  );
 
   const handleDesktopUpdateButtonClick = useCallback(() => {
     const bridge = window.desktopBridge;
@@ -1164,6 +1171,29 @@ export default function Sidebar() {
       )}
 
       <SidebarContent className="gap-0">
+        <SidebarGroup className="px-2 pt-2 pb-1">
+          <SidebarMenu>
+            <SidebarMenuItem>
+              <CommandDialogTrigger
+                render={
+                  <SidebarMenuButton
+                    size="sm"
+                    className="gap-2 px-2 py-1.5 text-muted-foreground/70 hover:bg-accent hover:text-foreground"
+                    data-testid="command-palette-trigger"
+                  />
+                }
+              >
+                <SearchIcon className="size-3.5" />
+                <span className="flex-1 truncate text-left text-xs">Search commands</span>
+                {commandPaletteShortcutLabel ? (
+                  <Kbd className="h-4 min-w-0 rounded-sm px-1.5 text-[10px]">
+                    {commandPaletteShortcutLabel}
+                  </Kbd>
+                ) : null}
+              </CommandDialogTrigger>
+            </SidebarMenuItem>
+          </SidebarMenu>
+        </SidebarGroup>
         {showArm64IntelBuildWarning && arm64IntelBuildWarningDescription ? (
           <SidebarGroup className="px-2 pt-2 pb-0">
             <Alert variant="warning" className="rounded-2xl border-warning/40 bg-warning/8">
