@@ -5,6 +5,7 @@ const WEEK_MS = 7 * DAY_MS;
 const MONTH_MS = 30 * DAY_MS;
 const YEAR_MS = 365 * DAY_MS;
 let relativeTimeFormatter: Intl.RelativeTimeFormat | null = null;
+export type RelativeTimeStyle = "long" | "short";
 
 function formatRelativeUnit(value: number, unit: Intl.RelativeTimeFormatUnit): string {
   if (relativeTimeFormatter === null) {
@@ -13,31 +14,43 @@ function formatRelativeUnit(value: number, unit: Intl.RelativeTimeFormatUnit): s
   return relativeTimeFormatter.format(-value, unit);
 }
 
-export function formatRelativeTime(isoDate: string, nowMs = Date.now()): string {
+function formatShortRelativeUnit(value: number, suffix: string): string {
+  return `${value}${suffix} ago`;
+}
+
+export function formatRelativeTime(
+  isoDate: string,
+  nowMs = Date.now(),
+  style: RelativeTimeStyle = "long",
+): string {
   const targetMs = Date.parse(isoDate);
   if (Number.isNaN(targetMs)) {
     return "";
   }
 
   const diffMs = Math.max(0, nowMs - targetMs);
+  const formatUnit = (value: number, unit: Intl.RelativeTimeFormatUnit, shortSuffix: string) =>
+    style === "short"
+      ? formatShortRelativeUnit(value, shortSuffix)
+      : formatRelativeUnit(value, unit);
 
   if (diffMs < MINUTE_MS) {
     return "just now";
   }
   if (diffMs < HOUR_MS) {
-    return formatRelativeUnit(Math.floor(diffMs / MINUTE_MS), "minute");
+    return formatUnit(Math.floor(diffMs / MINUTE_MS), "minute", "m");
   }
   if (diffMs < DAY_MS) {
-    return formatRelativeUnit(Math.floor(diffMs / HOUR_MS), "hour");
+    return formatUnit(Math.floor(diffMs / HOUR_MS), "hour", "h");
   }
   if (diffMs < WEEK_MS) {
-    return formatRelativeUnit(Math.floor(diffMs / DAY_MS), "day");
+    return formatUnit(Math.floor(diffMs / DAY_MS), "day", "d");
   }
   if (diffMs < MONTH_MS) {
-    return formatRelativeUnit(Math.floor(diffMs / WEEK_MS), "week");
+    return formatUnit(Math.floor(diffMs / WEEK_MS), "week", "w");
   }
   if (diffMs < YEAR_MS) {
-    return formatRelativeUnit(Math.floor(diffMs / MONTH_MS), "month");
+    return formatUnit(Math.floor(diffMs / MONTH_MS), "month", "mo");
   }
-  return formatRelativeUnit(Math.floor(diffMs / YEAR_MS), "year");
+  return formatUnit(Math.floor(diffMs / YEAR_MS), "year", "y");
 }

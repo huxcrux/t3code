@@ -13,4 +13,10 @@ describe("formatRelativeTime", () => {
     expect(formatRelativeTime("2026-03-15T09:00:00.000Z", nowMs)).toBe("3 hours ago");
     expect(formatRelativeTime("2026-03-12T12:00:00.000Z", nowMs)).toBe("3 days ago");
   });
+
+  it("supports compact m/h/d formatting", () => {
+    expect(formatRelativeTime("2026-03-15T11:55:00.000Z", nowMs, "short")).toBe("5m ago");
+    expect(formatRelativeTime("2026-03-15T09:00:00.000Z", nowMs, "short")).toBe("3h ago");
+    expect(formatRelativeTime("2026-03-12T12:00:00.000Z", nowMs, "short")).toBe("3d ago");
+  });
 });

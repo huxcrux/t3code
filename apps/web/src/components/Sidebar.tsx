@@ -1572,7 +1572,11 @@ export default function Sidebar() {
                                               : "text-muted-foreground/40"
                                           }`}
                                         >
-                                          {formatRelativeTime(thread.createdAt)}
+                                          {formatRelativeTime(
+                                            thread.createdAt,
+                                            Date.now(),
+                                            "short",
+                                          )}
                                         </span>
                                       </div>
                                     </SidebarMenuSubButton>
