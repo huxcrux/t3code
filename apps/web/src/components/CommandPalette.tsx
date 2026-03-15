@@ -24,10 +24,6 @@ import { cn } from "../lib/utils";
 import { shortcutLabelForCommand } from "../keybindings";
 import { formatRelativeTime } from "../relativeTime";
 import { useStore } from "../store";
-import {
-  compareThreadsByLastActivityDesc,
-  resolveThreadLastActivityAt,
-} from "../threadPresentation";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   Command,
@@ -79,6 +75,17 @@ const COMMAND_PALETTE_GROUP_PRIORITY = new Map(
 
 function iconClassName() {
   return "size-4 text-muted-foreground/80";
+}
+
+function compareThreadsByCreatedAtDesc(
+  left: { id: string; createdAt: string },
+  right: { id: string; createdAt: string },
+): number {
+  const byTimestamp = Date.parse(right.createdAt) - Date.parse(left.createdAt);
+  if (!Number.isNaN(byTimestamp) && byTimestamp !== 0) {
+    return byTimestamp;
+  }
+  return right.id.localeCompare(left.id);
 }
 
 function normalizeSearchText(value: string): string {
@@ -229,7 +236,7 @@ function OpenCommandPaletteDialog() {
     }));
 
     const recentThreadItems = threads
-      .toSorted(compareThreadsByLastActivityDesc)
+      .toSorted(compareThreadsByCreatedAtDesc)
       .slice(0, RECENT_THREAD_LIMIT)
       .map<CommandPaletteItem>((thread) => {
         const projectTitle = projectTitleById.get(thread.projectId);
@@ -244,7 +251,7 @@ function OpenCommandPaletteDialog() {
           label: `${thread.title} ${projectTitle ?? ""} ${thread.branch ?? ""}`.trim(),
           title: thread.title,
           description: descriptionParts.join(" · "),
-          timestamp: formatRelativeTime(resolveThreadLastActivityAt(thread)),
+          timestamp: formatRelativeTime(thread.createdAt),
           icon: <MessageSquareIcon className={iconClassName()} />,
           run: async () => {
             await navigate({
