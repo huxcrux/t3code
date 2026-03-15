@@ -4,7 +4,15 @@ import { type KeybindingCommand } from "@t3tools/contracts";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { MessageSquareIcon, SettingsIcon, SquarePenIcon } from "lucide-react";
-import { createContext, useCallback, useContext, useMemo, useState, type ReactNode } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useDeferredValue,
+  useMemo,
+  useState,
+  type ReactNode,
+} from "react";
 import { useAppSettings } from "../appSettings";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
 import {
@@ -63,6 +71,10 @@ function iconClassName() {
   return "size-4 text-muted-foreground/80";
 }
 
+function normalizeSearchText(value: string): string {
+  return value.trim().toLowerCase().replace(/\s+/g, " ");
+}
+
 export function useCommandPalette() {
   const context = useContext(CommandPaletteContext);
   if (!context) {
@@ -108,6 +120,8 @@ function CommandPaletteDialog() {
 function OpenCommandPaletteDialog() {
   const navigate = useNavigate();
   const { setOpen } = useCommandPalette();
+  const [query, setQuery] = useState("");
+  const deferredQuery = useDeferredValue(query);
   const { settings } = useAppSettings();
   const { activeDraftThread, activeThread, handleNewThread, projects } = useHandleNewThread();
   const threads = useStore((store) => store.threads);
@@ -118,7 +132,7 @@ function OpenCommandPaletteDialog() {
     [projects],
   );
 
-  const groups = useMemo<CommandPaletteGroup[]>(() => {
+  const allGroups = useMemo<CommandPaletteGroup[]>(() => {
     const actionItems: CommandPaletteItem[] = [];
     if (projects.length > 0) {
       const activeProjectTitle =
@@ -248,6 +262,25 @@ function OpenCommandPaletteDialog() {
     threads,
   ]);
 
+  const filteredGroups = useMemo(() => {
+    const normalizedQuery = normalizeSearchText(deferredQuery);
+    if (normalizedQuery.length === 0) {
+      return allGroups;
+    }
+
+    return allGroups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => {
+          const haystack = normalizeSearchText(
+            [item.label, item.title, item.description ?? ""].join(" "),
+          );
+          return haystack.includes(normalizedQuery);
+        }),
+      }))
+      .filter((group) => group.items.length > 0);
+  }, [allGroups, deferredQuery]);
+
   const executeItem = useCallback(
     (item: CommandPaletteItem) => {
       setOpen(false);
@@ -268,11 +301,11 @@ function OpenCommandPaletteDialog() {
       className="overflow-hidden p-0"
       data-testid="command-palette"
     >
-      <Command aria-label="Command palette" items={groups}>
+      <Command aria-label="Command palette" mode="none" onValueChange={setQuery} value={query}>
         <CommandInput placeholder="Search commands and threads..." />
         <CommandPanel className="max-h-[min(28rem,70vh)]">
           <CommandList>
-            {groups.map((group) => (
+            {filteredGroups.map((group) => (
               <CommandGroup items={group.items} key={group.value}>
                 <CommandGroupLabel>{group.label}</CommandGroupLabel>
                 <CommandCollection>
