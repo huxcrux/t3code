@@ -55,6 +55,7 @@ interface CommandPaletteItem {
   readonly label: string;
   readonly title: string;
   readonly description?: string;
+  readonly searchText?: string;
   readonly timestamp?: string;
   readonly icon: ReactNode;
   readonly shortcutCommand?: KeybindingCommand;
@@ -160,6 +161,7 @@ function OpenCommandPaletteDialog() {
         description: activeProjectTitle
           ? `Create a draft thread in ${activeProjectTitle}`
           : "Create a new draft thread",
+        searchText: "new thread chat create draft",
         icon: <SquarePenIcon className={iconClassName()} />,
         shortcutCommand: "chat.new",
         run: async () => {
@@ -179,6 +181,7 @@ function OpenCommandPaletteDialog() {
         description: activeProjectTitle
           ? `Create a fresh ${settings.defaultThreadEnvMode} thread in ${activeProjectTitle}`
           : "Create a fresh thread using the default environment",
+        searchText: "new local thread chat create fresh default environment",
         icon: <SquarePenIcon className={iconClassName()} />,
         shortcutCommand: "chat.newLocal",
         run: async () => {
@@ -289,7 +292,11 @@ function OpenCommandPaletteDialog() {
         ...group,
         items: group.items.filter((item) => {
           const haystack = normalizeSearchText(
-            [item.label, item.title, item.description ?? ""].join(" "),
+            [
+              item.title,
+              item.searchText ?? item.label,
+              item.searchText ? "" : (item.description ?? ""),
+            ].join(" "),
           );
           return haystack.includes(normalizedQuery);
         }),

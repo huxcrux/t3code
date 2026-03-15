@@ -1275,6 +1275,58 @@ describe("ChatView timeline estimator parity (full app)", () => {
     }
   });
 
+  it("does not match thread actions from contextual project names", async () => {
+    const mounted = await mountChatView({
+      viewport: DEFAULT_VIEWPORT,
+      snapshot: createSnapshotForTargetUser({
+        targetMessageId: "msg-user-command-palette-project-query-test" as MessageId,
+        targetText: "command palette project query test",
+      }),
+      configureFixture: (nextFixture) => {
+        nextFixture.serverConfig = {
+          ...nextFixture.serverConfig,
+          keybindings: [
+            {
+              command: "commandPalette.toggle",
+              shortcut: {
+                key: "k",
+                metaKey: false,
+                ctrlKey: false,
+                shiftKey: false,
+                altKey: false,
+                modKey: true,
+              },
+              whenAst: {
+                type: "not",
+                node: { type: "identifier", name: "terminalFocus" },
+              },
+            },
+          ],
+        };
+      },
+    });
+
+    try {
+      const useMetaForMod = isMacPlatform(navigator.platform);
+      window.dispatchEvent(
+        new KeyboardEvent("keydown", {
+          key: "k",
+          metaKey: useMetaForMod,
+          ctrlKey: !useMetaForMod,
+          bubbles: true,
+          cancelable: true,
+        }),
+      );
+
+      await expect.element(page.getByTestId("command-palette")).toBeInTheDocument();
+      await page.getByPlaceholder("Search commands, projects, and threads...").fill("project");
+      await expect.element(page.getByText("Project")).toBeInTheDocument();
+      await expect.element(page.getByText("New thread")).not.toBeInTheDocument();
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
   it("searches projects by path and opens a new thread using the default env mode", async () => {
     localStorage.setItem(
       "t3code:app-settings:v1",
