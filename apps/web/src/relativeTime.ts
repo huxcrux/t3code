@@ -4,9 +4,13 @@ const DAY_MS = 24 * HOUR_MS;
 const WEEK_MS = 7 * DAY_MS;
 const MONTH_MS = 30 * DAY_MS;
 const YEAR_MS = 365 * DAY_MS;
+let relativeTimeFormatter: Intl.RelativeTimeFormat | null = null;
 
 function formatRelativeUnit(value: number, unit: Intl.RelativeTimeFormatUnit): string {
-  return new Intl.RelativeTimeFormat(undefined, { numeric: "auto" }).format(-value, unit);
+  if (relativeTimeFormatter === null) {
+    relativeTimeFormatter = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
+  }
+  return relativeTimeFormatter.format(-value, unit);
 }
 
 export function formatRelativeTime(isoDate: string, nowMs = Date.now()): string {

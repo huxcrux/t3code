@@ -24,6 +24,10 @@ import { cn } from "../lib/utils";
 import { shortcutLabelForCommand } from "../keybindings";
 import { formatRelativeTime } from "../relativeTime";
 import { useStore } from "../store";
+import {
+  compareThreadsByLastActivityDesc,
+  resolveThreadLastActivityAt,
+} from "../threadPresentation";
 import { Kbd, KbdGroup } from "./ui/kbd";
 import {
   Command,
@@ -68,70 +72,31 @@ interface CommandPaletteGroup {
 }
 
 const CommandPaletteContext = createContext<CommandPaletteState | null>(null);
+const COMMAND_PALETTE_GROUP_ORDER = ["actions", "projects", "recent-threads"] as const;
+const COMMAND_PALETTE_GROUP_PRIORITY = new Map(
+  COMMAND_PALETTE_GROUP_ORDER.map((value, index) => [value, index] as const),
+);
 
 function iconClassName() {
   return "size-4 text-muted-foreground/80";
-}
-
-function resolveThreadLastActivityAt(thread: {
-  createdAt: string;
-  latestTurn: {
-    completedAt: string | null;
-    startedAt: string | null;
-    requestedAt: string;
-  } | null;
-}): string {
-  return (
-    thread.latestTurn?.completedAt ??
-    thread.latestTurn?.startedAt ??
-    thread.latestTurn?.requestedAt ??
-    thread.createdAt
-  );
-}
-
-function compareThreadsByLastActivityDesc(
-  left: {
-    id: string;
-    createdAt: string;
-    latestTurn: {
-      completedAt: string | null;
-      startedAt: string | null;
-      requestedAt: string;
-    } | null;
-  },
-  right: {
-    id: string;
-    createdAt: string;
-    latestTurn: {
-      completedAt: string | null;
-      startedAt: string | null;
-      requestedAt: string;
-    } | null;
-  },
-): number {
-  const byTimestamp =
-    Date.parse(resolveThreadLastActivityAt(right)) - Date.parse(resolveThreadLastActivityAt(left));
-  if (!Number.isNaN(byTimestamp) && byTimestamp !== 0) {
-    return byTimestamp;
-  }
-  return right.id.localeCompare(left.id);
 }
 
 function normalizeSearchText(value: string): string {
   return value.trim().toLowerCase().replace(/\s+/g, " ");
 }
 
-function groupPriorityForQuery(group: CommandPaletteGroup): number {
-  switch (group.value) {
-    case "actions":
-      return 0;
-    case "projects":
-      return 1;
-    case "recent-threads":
-      return 2;
-    default:
-      return 3;
-  }
+function compareCommandPaletteGroups(
+  left: CommandPaletteGroup,
+  right: CommandPaletteGroup,
+): number {
+  return (
+    (COMMAND_PALETTE_GROUP_PRIORITY.get(
+      left.value as (typeof COMMAND_PALETTE_GROUP_ORDER)[number],
+    ) ?? COMMAND_PALETTE_GROUP_ORDER.length) -
+    (COMMAND_PALETTE_GROUP_PRIORITY.get(
+      right.value as (typeof COMMAND_PALETTE_GROUP_ORDER)[number],
+    ) ?? COMMAND_PALETTE_GROUP_ORDER.length)
+  );
 }
 
 export function useCommandPalette() {
@@ -312,7 +277,7 @@ function OpenCommandPaletteDialog() {
         items: recentThreadItems,
       });
     }
-    return nextGroups;
+    return nextGroups.toSorted(compareCommandPaletteGroups);
   }, [
     activeDraftThread,
     activeThread,
@@ -341,7 +306,7 @@ function OpenCommandPaletteDialog() {
         }),
       }))
       .filter((group) => group.items.length > 0)
-      .toSorted((left, right) => groupPriorityForQuery(left) - groupPriorityForQuery(right));
+      .toSorted(compareCommandPaletteGroups);
   }, [allGroups, deferredQuery]);
 
   const executeItem = useCallback(
