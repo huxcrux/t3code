@@ -20,9 +20,9 @@ const WORKING_ROW_HEIGHT_PX = 40;
 const ASSISTANT_COMPLETION_DIVIDER_HEIGHT_PX = 48;
 const ASSISTANT_DIFF_SUMMARY_BASE_HEIGHT_PX = 74;
 const ASSISTANT_DIFF_TREE_NODE_HEIGHT_PX = 24;
-const PROPOSED_PLAN_BASE_HEIGHT_PX = 110;
-const PROPOSED_PLAN_COLLAPSED_CONTROLS_HEIGHT_PX = 60;
-const PROPOSED_PLAN_COLLAPSED_PREVIEW_MAX_HEIGHT_PX = 300;
+const PROPOSED_PLAN_BASE_HEIGHT_PX = 94;
+const PROPOSED_PLAN_COLLAPSED_CONTROLS_HEIGHT_PX = 52;
+const PROPOSED_PLAN_COLLAPSED_PREVIEW_MAX_HEIGHT_PX = 416;
 const ATTACHMENTS_PER_ROW = 2;
 // Attachment thumbnails render with `max-h-[220px]` plus ~8px row gap.
 const USER_ATTACHMENT_ROW_HEIGHT_PX = 228;
@@ -182,11 +182,91 @@ function estimateAssistantMessageHeight(
   layout: TimelineHeightEstimateLayout,
 ): number {
   return estimateTextHeight({
-    text,
+    text: normalizeAssistantTextForWrapping(text),
     charsPerLine: estimateCharsPerLineForAssistant(layout.timelineWidthPx),
     baseHeightPx: ASSISTANT_BASE_HEIGHT_PX,
     extraHeightPx: estimateAssistantMarkdownStructureBonusPx(text),
   });
+}
+
+function normalizeAssistantTextForWrapping(text: string): string {
+  if (text.length === 0) {
+    return text;
+  }
+
+  const normalizedLines: string[] = [];
+  let paragraphBuffer: string[] = [];
+  let insideFence = false;
+
+  const flushParagraph = () => {
+    if (paragraphBuffer.length === 0) {
+      return;
+    }
+    normalizedLines.push(paragraphBuffer.join(" "));
+    paragraphBuffer = [];
+  };
+
+  for (const line of text.split("\n")) {
+    const trimmed = line.trim();
+    const fenceBoundary = /^(```|~~~)/.test(trimmed);
+    const tableSeparator = isMarkdownTableSeparatorRow(trimmed);
+    const normalizedLine = normalizeAssistantMarkdownLine(trimmed, {
+      insideFence,
+      tableSeparator,
+    });
+    const keepsOwnLine =
+      trimmed.length === 0 ||
+      insideFence ||
+      fenceBoundary ||
+      /^#{1,6}\s+/.test(trimmed) ||
+      /^([-*+]\s+|\d+[.)]\s+)/.test(trimmed) ||
+      /^>\s?/.test(trimmed) ||
+      looksLikeMarkdownTableRow(trimmed);
+
+    if (fenceBoundary) {
+      flushParagraph();
+    } else if (keepsOwnLine) {
+      flushParagraph();
+      if (normalizedLine.length > 0) {
+        normalizedLines.push(normalizedLine);
+      }
+    } else {
+      paragraphBuffer.push(normalizedLine);
+    }
+
+    if (fenceBoundary) {
+      insideFence = !insideFence;
+    }
+  }
+
+  flushParagraph();
+  return normalizedLines.join("\n");
+}
+
+function normalizeAssistantMarkdownLine(
+  line: string,
+  options: { insideFence: boolean; tableSeparator: boolean },
+): string {
+  if (line.length === 0) {
+    return line;
+  }
+  if (options.tableSeparator) {
+    return "";
+  }
+  if (options.insideFence) {
+    return line;
+  }
+  if (looksLikeMarkdownTableRow(line)) {
+    return line
+      .split("|")
+      .map((cell) => cell.trim())
+      .filter((cell) => cell.length > 0)
+      .join(" ");
+  }
+  return line
+    .replace(/^#{1,6}\s+/, "")
+    .replace(/^([-*+]\s+|\d+[.)]\s+)/, "")
+    .replace(/^>\s?/, "");
 }
 
 function estimateAssistantMarkdownStructureBonusPx(text: string): number {
@@ -195,7 +275,6 @@ function estimateAssistantMarkdownStructureBonusPx(text: string): number {
   }
 
   const lines = text.split("\n");
-  let blankLineCount = 0;
   let headingCount = 0;
   let listItemCount = 0;
   let blockquoteLineCount = 0;
@@ -218,7 +297,6 @@ function estimateAssistantMarkdownStructureBonusPx(text: string): number {
     }
 
     if (trimmed.length === 0) {
-      blankLineCount += 1;
       continue;
     }
     if (/^#{1,6}\s+/.test(trimmed)) {
@@ -240,17 +318,20 @@ function estimateAssistantMarkdownStructureBonusPx(text: string): number {
   }
 
   return (
-    blankLineCount * 8 +
-    headingCount * 10 +
-    listItemCount * 4 +
-    blockquoteLineCount * 3 +
-    tableLineCount * 10 +
+    headingCount * 6 +
+    listItemCount * 2 +
+    blockquoteLineCount * 4 +
+    tableLineCount * 8 +
     fencedCodeBlockCount * 44
   );
 }
 
 function looksLikeMarkdownTableRow(line: string): boolean {
   return line.includes("|") && line.split("|").length - 1 >= 2;
+}
+
+function isMarkdownTableSeparatorRow(line: string): boolean {
+  return /^[\s|:-]+$/.test(line) && line.includes("-");
 }
 
 function estimateAssistantDiffSummaryHeight(
