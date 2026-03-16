@@ -5,6 +5,11 @@ import { findLatestProposedPlan, isLatestTurnSettled } from "../session-logic";
 export const THREAD_SELECTION_SAFE_SELECTOR = "[data-thread-item], [data-thread-selection-safe]";
 export type SidebarNewThreadEnvMode = "local" | "worktree";
 
+export interface ProjectDeleteConfirmationCopy {
+  title: string;
+  descriptionLines: string[];
+}
+
 export interface ThreadStatusPill {
   label:
     | "Working"
@@ -44,6 +49,27 @@ export function resolveSidebarNewThreadEnvMode(input: {
   defaultEnvMode: SidebarNewThreadEnvMode;
 }): SidebarNewThreadEnvMode {
   return input.requestedEnvMode ?? input.defaultEnvMode;
+}
+
+function pluralize(count: number, singular: string, plural = `${singular}s`): string {
+  return `${count} ${count === 1 ? singular : plural}`;
+}
+
+export function resolveProjectDeleteConfirmationCopy(input: {
+  projectName: string;
+  threadCount: number;
+  worktreeCount: number;
+}): ProjectDeleteConfirmationCopy {
+  return {
+    title: `Delete project "${input.projectName}"?`,
+    descriptionLines: [
+      `This will delete ${pluralize(input.threadCount, "thread")} in this project.`,
+      ...(input.worktreeCount > 0
+        ? [`It will also remove ${pluralize(input.worktreeCount, "orphaned worktree")} from disk.`]
+        : []),
+      "This action cannot be undone.",
+    ],
+  };
 }
 
 export function resolveThreadRowClassName(input: {

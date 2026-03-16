@@ -29,6 +29,7 @@ import { CSS } from "@dnd-kit/utilities";
 import {
   DEFAULT_MODEL_BY_PROVIDER,
   type DesktopUpdateState,
+  type NativeApi,
   ProjectId,
   ThreadId,
   type GitStatusResult,
@@ -62,8 +63,17 @@ import {
   shouldToastDesktopUpdateActionResult,
 } from "./desktopUpdate.logic";
 import { Alert, AlertAction, AlertDescription, AlertTitle } from "./ui/alert";
+import {
+  AlertDialog,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogPopup,
+  AlertDialogTitle,
+} from "./ui/alert-dialog";
 import { Button } from "./ui/button";
 import { Collapsible, CollapsibleContent } from "./ui/collapsible";
+import { Input } from "./ui/input";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "./ui/tooltip";
 import {
   SidebarContent,
@@ -81,9 +91,14 @@ import {
   SidebarTrigger,
 } from "./ui/sidebar";
 import { useThreadSelectionStore } from "../threadSelectionStore";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "../worktreeCleanup";
+import {
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+  getOrphanedWorktreePathsForDeletedThreads,
+} from "../worktreeCleanup";
 import { isNonEmpty as isNonEmptyString } from "effect/String";
 import {
+  resolveProjectDeleteConfirmationCopy,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
@@ -299,6 +314,9 @@ export default function Sidebar() {
   const dragInProgressRef = useRef(false);
   const suppressProjectClickAfterDragRef = useRef(false);
   const [desktopUpdateState, setDesktopUpdateState] = useState<DesktopUpdateState | null>(null);
+  const [projectDeleteTargetId, setProjectDeleteTargetId] = useState<ProjectId | null>(null);
+  const [projectDeleteConfirmationText, setProjectDeleteConfirmationText] = useState("");
+  const [isDeletingProject, setIsDeletingProject] = useState(false);
   const selectedThreadIds = useThreadSelectionStore((s) => s.selectedThreadIds);
   const toggleThreadSelection = useThreadSelectionStore((s) => s.toggleThread);
   const rangeSelectTo = useThreadSelectionStore((s) => s.rangeSelectTo);
@@ -311,6 +329,39 @@ export default function Sidebar() {
     () => new Map(projects.map((project) => [project.id, project.cwd] as const)),
     [projects],
   );
+  const projectDeleteState = useMemo(() => {
+    if (projectDeleteTargetId === null) {
+      return null;
+    }
+
+    const project = projects.find((entry) => entry.id === projectDeleteTargetId) ?? null;
+    if (!project) {
+      return null;
+    }
+
+    const projectThreads = threads.filter((thread) => thread.projectId === project.id);
+    const deletedThreadIds = new Set(projectThreads.map((thread) => thread.id));
+    const orphanedWorktreePaths = getOrphanedWorktreePathsForDeletedThreads(
+      threads,
+      deletedThreadIds,
+    );
+
+    return {
+      project,
+      projectThreads,
+      deletedThreadIds,
+      orphanedWorktreePaths,
+      confirmationCopy: resolveProjectDeleteConfirmationCopy({
+        projectName: project.name,
+        threadCount: projectThreads.length,
+        worktreeCount: orphanedWorktreePaths.length,
+      }),
+    };
+  }, [projectDeleteTargetId, projects, threads]);
+  const requiresTypedProjectDeleteConfirmation =
+    (projectDeleteState?.projectThreads.length ?? 0) > 0;
+  const isProjectDeleteConfirmationMatch =
+    !requiresTypedProjectDeleteConfirmation || projectDeleteConfirmationText === "delete";
   const threadGitTargets = useMemo(
     () =>
       threads.map((thread) => ({
@@ -547,6 +598,51 @@ export default function Sidebar() {
     [],
   );
 
+  const closeProjectDeleteDialog = useCallback(() => {
+    if (isDeletingProject) {
+      return;
+    }
+    setProjectDeleteTargetId(null);
+    setProjectDeleteConfirmationText("");
+  }, [isDeletingProject]);
+
+  const deleteThreadData = useCallback(
+    async (
+      api: NativeApi,
+      thread: (typeof threads)[number],
+      opts: { createdAt?: string } = {},
+    ): Promise<void> => {
+      const createdAt = opts.createdAt ?? new Date().toISOString();
+
+      if (thread.session && thread.session.status !== "closed") {
+        await api.orchestration
+          .dispatchCommand({
+            type: "thread.session.stop",
+            commandId: newCommandId(),
+            threadId: thread.id,
+            createdAt,
+          })
+          .catch(() => undefined);
+      }
+
+      try {
+        await api.terminal.close({ threadId: thread.id, deleteHistory: true });
+      } catch {
+        // Terminal may already be closed
+      }
+
+      await api.orchestration.dispatchCommand({
+        type: "thread.delete",
+        commandId: newCommandId(),
+        threadId: thread.id,
+      });
+      clearComposerDraftForThread(thread.id);
+      clearProjectDraftThreadById(thread.projectId, thread.id);
+      clearTerminalState(thread.id);
+    },
+    [clearComposerDraftForThread, clearProjectDraftThreadById, clearTerminalState],
+  );
+
   /**
    * Delete a single thread: stop session, close terminal, dispatch delete,
    * clean up drafts/state, and optionally remove orphaned worktree.
@@ -587,35 +683,11 @@ export default function Sidebar() {
           ].join("\n"),
         ));
 
-      if (thread.session && thread.session.status !== "closed") {
-        await api.orchestration
-          .dispatchCommand({
-            type: "thread.session.stop",
-            commandId: newCommandId(),
-            threadId,
-            createdAt: new Date().toISOString(),
-          })
-          .catch(() => undefined);
-      }
-
-      try {
-        await api.terminal.close({ threadId, deleteHistory: true });
-      } catch {
-        // Terminal may already be closed
-      }
-
       const allDeletedIds = deletedIds ?? new Set<ThreadId>();
       const shouldNavigateToFallback = routeThreadId === threadId;
       const fallbackThreadId =
         threads.find((entry) => entry.id !== threadId && !allDeletedIds.has(entry.id))?.id ?? null;
-      await api.orchestration.dispatchCommand({
-        type: "thread.delete",
-        commandId: newCommandId(),
-        threadId,
-      });
-      clearComposerDraftForThread(threadId);
-      clearProjectDraftThreadById(thread.projectId, thread.id);
-      clearTerminalState(threadId);
+      await deleteThreadData(api, thread);
       if (shouldNavigateToFallback) {
         if (fallbackThreadId) {
           void navigate({
@@ -653,16 +725,7 @@ export default function Sidebar() {
         });
       }
     },
-    [
-      clearComposerDraftForThread,
-      clearProjectDraftThreadById,
-      clearTerminalState,
-      navigate,
-      projects,
-      removeWorktreeMutation,
-      routeThreadId,
-      threads,
-    ],
+    [deleteThreadData, navigate, projects, removeWorktreeMutation, routeThreadId, threads],
   );
 
   const { copyToClipboard } = useCopyToClipboard<{ threadId: ThreadId }>({
@@ -828,52 +891,160 @@ export default function Sidebar() {
         position,
       );
       if (clicked !== "delete") return;
+      setProjectDeleteConfirmationText("");
+      setProjectDeleteTargetId(projectId);
+    },
+    [],
+  );
 
-      const project = projects.find((entry) => entry.id === projectId);
-      if (!project) return;
+  const handleConfirmProjectDelete = useCallback(async () => {
+    const api = readNativeApi();
+    if (!api || !projectDeleteState) {
+      setProjectDeleteTargetId(null);
+      setProjectDeleteConfirmationText("");
+      return;
+    }
 
-      const projectThreads = threads.filter((thread) => thread.projectId === projectId);
-      if (projectThreads.length > 0) {
-        toastManager.add({
-          type: "warning",
-          title: "Project is not empty",
-          description: "Delete all threads in this project before removing it.",
-        });
-        return;
+    const { deletedThreadIds, orphanedWorktreePaths, project, projectThreads } = projectDeleteState;
+    const shouldNavigateAway = routeThreadId !== null && deletedThreadIds.has(routeThreadId);
+    const fallbackThreadId = threads.find((thread) => !deletedThreadIds.has(thread.id))?.id ?? null;
+    const threadsToDelete =
+      routeThreadId !== null && deletedThreadIds.has(routeThreadId)
+        ? [
+            ...projectThreads.filter((thread) => thread.id !== routeThreadId),
+            ...projectThreads.filter((thread) => thread.id === routeThreadId),
+          ]
+        : projectThreads;
+    const deletedThreadIdList: ThreadId[] = [];
+
+    setIsDeletingProject(true);
+
+    try {
+      for (const thread of threadsToDelete) {
+        await deleteThreadData(api, thread);
+        deletedThreadIdList.push(thread.id);
       }
 
-      const confirmed = await api.dialogs.confirm(`Remove project "${project.name}"?`);
-      if (!confirmed) return;
+      if (deletedThreadIdList.length > 0) {
+        removeFromSelection(deletedThreadIdList);
+      }
 
-      try {
-        const projectDraftThread = getDraftThreadByProjectId(projectId);
+      const projectDraftThread = getDraftThreadByProjectId(project.id);
+      if (projectDraftThread) {
+        clearComposerDraftForThread(projectDraftThread.threadId);
+      }
+      clearProjectDraftThreadId(project.id);
+
+      await api.orchestration.dispatchCommand({
+        type: "project.delete",
+        commandId: newCommandId(),
+        projectId: project.id,
+      });
+
+      setProjectDeleteTargetId(null);
+      setProjectDeleteConfirmationText("");
+
+      if (shouldNavigateAway) {
+        if (fallbackThreadId) {
+          void navigate({
+            to: "/$threadId",
+            params: { threadId: fallbackThreadId },
+            replace: true,
+          });
+        } else {
+          void navigate({ to: "/", replace: true });
+        }
+      }
+
+      const failedWorktreePaths: string[] = [];
+      for (const worktreePath of orphanedWorktreePaths) {
+        try {
+          await removeWorktreeMutation.mutateAsync({
+            cwd: project.cwd,
+            path: worktreePath,
+            force: true,
+          });
+        } catch (error) {
+          failedWorktreePaths.push(formatWorktreePathForDisplay(worktreePath));
+          console.error("Failed to remove orphaned worktree after project deletion", {
+            projectId: project.id,
+            projectCwd: project.cwd,
+            worktreePath,
+            error,
+          });
+        }
+      }
+
+      if (failedWorktreePaths.length > 0) {
+        toastManager.add({
+          type: "error",
+          title:
+            failedWorktreePaths.length === 1
+              ? "Project deleted, but worktree removal failed"
+              : "Project deleted, but some worktrees could not be removed",
+          description: `Could not remove ${failedWorktreePaths.join(", ")}.`,
+        });
+      }
+    } catch (error) {
+      if (deletedThreadIdList.length > 0) {
+        removeFromSelection(deletedThreadIdList);
+      }
+
+      if (deletedThreadIdList.length === projectThreads.length) {
+        const projectDraftThread = getDraftThreadByProjectId(project.id);
         if (projectDraftThread) {
           clearComposerDraftForThread(projectDraftThread.threadId);
         }
-        clearProjectDraftThreadId(projectId);
-        await api.orchestration.dispatchCommand({
-          type: "project.delete",
-          commandId: newCommandId(),
-          projectId,
-        });
-      } catch (error) {
-        const message = error instanceof Error ? error.message : "Unknown error removing project.";
-        console.error("Failed to remove project", { projectId, error });
+        clearProjectDraftThreadId(project.id);
+
+        if (shouldNavigateAway) {
+          if (fallbackThreadId) {
+            void navigate({
+              to: "/$threadId",
+              params: { threadId: fallbackThreadId },
+              replace: true,
+            });
+          } else {
+            void navigate({ to: "/", replace: true });
+          }
+        }
+
         toastManager.add({
           type: "error",
           title: `Failed to remove "${project.name}"`,
-          description: message,
+          description: "All threads were deleted, but the project could not be removed.",
+        });
+      } else {
+        toastManager.add({
+          type: "error",
+          title: `Failed to remove "${project.name}"`,
+          description: `Could not fully delete "${project.name}". ${deletedThreadIdList.length} of ${projectThreads.length} thread${projectThreads.length === 1 ? "" : "s"} were deleted; the project was left in place.`,
         });
       }
-    },
-    [
-      clearComposerDraftForThread,
-      clearProjectDraftThreadId,
-      getDraftThreadByProjectId,
-      projects,
-      threads,
-    ],
-  );
+
+      console.error("Failed to delete project", {
+        projectId: project.id,
+        deletedThreadCount: deletedThreadIdList.length,
+        totalThreadCount: projectThreads.length,
+        error,
+      });
+      setProjectDeleteTargetId(null);
+      setProjectDeleteConfirmationText("");
+    } finally {
+      setIsDeletingProject(false);
+    }
+  }, [
+    clearComposerDraftForThread,
+    clearProjectDraftThreadId,
+    deleteThreadData,
+    getDraftThreadByProjectId,
+    navigate,
+    projectDeleteState,
+    removeFromSelection,
+    removeWorktreeMutation,
+    routeThreadId,
+    threads,
+  ]);
 
   const projectDnDSensors = useSensors(
     useSensor(PointerSensor, {
@@ -1634,6 +1805,68 @@ export default function Sidebar() {
           </SidebarMenuItem>
         </SidebarMenu>
       </SidebarFooter>
+
+      <AlertDialog
+        open={projectDeleteTargetId !== null && projectDeleteState !== null}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeProjectDeleteDialog();
+          }
+        }}
+      >
+        <AlertDialogPopup>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {projectDeleteState?.confirmationCopy.title ?? "Delete project?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {(
+                projectDeleteState?.confirmationCopy.descriptionLines ?? [
+                  "This action cannot be undone.",
+                ]
+              ).map((line) => (
+                <p key={line}>{line}</p>
+              ))}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          {requiresTypedProjectDeleteConfirmation ? (
+            <div className="max-w-md space-y-2 px-6 pb-6">
+              <p className="text-sm text-muted-foreground">
+                Type <span className="font-mono text-foreground">delete</span> to confirm.
+              </p>
+              <div className="w-full max-w-xs">
+                <Input
+                  value={projectDeleteConfirmationText}
+                  onChange={(event) => setProjectDeleteConfirmationText(event.target.value)}
+                  placeholder="delete"
+                  autoComplete="off"
+                  autoCapitalize="off"
+                  autoCorrect="off"
+                  spellCheck={false}
+                  aria-label='Type "delete" to confirm project deletion'
+                  disabled={isDeletingProject}
+                />
+              </div>
+            </div>
+          ) : null}
+          <AlertDialogFooter>
+            <Button
+              variant="outline"
+              onClick={closeProjectDeleteDialog}
+              disabled={isDeletingProject}
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => void handleConfirmProjectDelete()}
+              disabled={isDeletingProject || !isProjectDeleteConfirmationMatch}
+            >
+              {isDeletingProject ? "Deleting..." : "Delete project"}
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogPopup>
+      </AlertDialog>
     </>
   );
 }

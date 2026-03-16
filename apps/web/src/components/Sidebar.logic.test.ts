@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import {
   hasUnseenCompletion,
+  resolveProjectDeleteConfirmationCopy,
   resolveSidebarNewThreadEnvMode,
   resolveThreadRowClassName,
   resolveThreadStatusPill,
@@ -80,6 +81,41 @@ describe("resolveSidebarNewThreadEnvMode", () => {
         defaultEnvMode: "worktree",
       }),
     ).toBe("local");
+  });
+});
+
+describe("resolveProjectDeleteConfirmationCopy", () => {
+  it("renders thread-only confirmation copy", () => {
+    expect(
+      resolveProjectDeleteConfirmationCopy({
+        projectName: "T3 Code",
+        threadCount: 1,
+        worktreeCount: 0,
+      }),
+    ).toEqual({
+      title: 'Delete project "T3 Code"?',
+      descriptionLines: [
+        "This will delete 1 thread in this project.",
+        "This action cannot be undone.",
+      ],
+    });
+  });
+
+  it("includes orphaned worktree deletion in the dialog copy", () => {
+    expect(
+      resolveProjectDeleteConfirmationCopy({
+        projectName: "T3 Code",
+        threadCount: 3,
+        worktreeCount: 2,
+      }),
+    ).toEqual({
+      title: 'Delete project "T3 Code"?',
+      descriptionLines: [
+        "This will delete 3 threads in this project.",
+        "It will also remove 2 orphaned worktrees from disk.",
+        "This action cannot be undone.",
+      ],
+    });
   });
 });
 

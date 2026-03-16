@@ -2,7 +2,11 @@ import { ProjectId, ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vitest";
 
 import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
-import { formatWorktreePathForDisplay, getOrphanedWorktreePathForThread } from "./worktreeCleanup";
+import {
+  formatWorktreePathForDisplay,
+  getOrphanedWorktreePathForThread,
+  getOrphanedWorktreePathsForDeletedThreads,
+} from "./worktreeCleanup";
 
 function makeThread(overrides: Partial<Thread> = {}): Thread {
   return {
@@ -73,6 +77,111 @@ describe("getOrphanedWorktreePathForThread", () => {
     ];
     const result = getOrphanedWorktreePathForThread(threads, ThreadId.makeUnsafe("thread-1"));
     expect(result).toBe("/tmp/repo/worktrees/feature-a");
+  });
+});
+
+describe("getOrphanedWorktreePathsForDeletedThreads", () => {
+  it("returns the unique worktree path for a single deleted thread", () => {
+    const threads = [makeThread({ worktreePath: "/tmp/repo/worktrees/feature-a" })];
+
+    expect(
+      getOrphanedWorktreePathsForDeletedThreads(
+        threads,
+        new Set([ThreadId.makeUnsafe("thread-1")]),
+      ),
+    ).toEqual(["/tmp/repo/worktrees/feature-a"]);
+  });
+
+  it("returns distinct worktree paths for multiple deleted threads", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-1"),
+        worktreePath: "/tmp/repo/worktrees/feature-a",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-2"),
+        worktreePath: "/tmp/repo/worktrees/feature-b",
+      }),
+    ];
+
+    expect(
+      getOrphanedWorktreePathsForDeletedThreads(
+        threads,
+        new Set([ThreadId.makeUnsafe("thread-1"), ThreadId.makeUnsafe("thread-2")]),
+      ),
+    ).toEqual(["/tmp/repo/worktrees/feature-a", "/tmp/repo/worktrees/feature-b"]);
+  });
+
+  it("dedupes shared worktree paths across deleted threads", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-1"),
+        worktreePath: "/tmp/repo/worktrees/shared",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-2"),
+        worktreePath: "/tmp/repo/worktrees/shared",
+      }),
+    ];
+
+    expect(
+      getOrphanedWorktreePathsForDeletedThreads(
+        threads,
+        new Set([ThreadId.makeUnsafe("thread-1"), ThreadId.makeUnsafe("thread-2")]),
+      ),
+    ).toEqual(["/tmp/repo/worktrees/shared"]);
+  });
+
+  it("excludes worktrees still referenced by surviving threads", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-1"),
+        worktreePath: "/tmp/repo/worktrees/shared",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-2"),
+        worktreePath: "/tmp/repo/worktrees/shared",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-3"),
+        worktreePath: "/tmp/repo/worktrees/unique",
+      }),
+    ];
+
+    expect(
+      getOrphanedWorktreePathsForDeletedThreads(
+        threads,
+        new Set([ThreadId.makeUnsafe("thread-1"), ThreadId.makeUnsafe("thread-3")]),
+      ),
+    ).toEqual(["/tmp/repo/worktrees/unique"]);
+  });
+
+  it("ignores null and blank worktree paths", () => {
+    const threads = [
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-1"),
+        worktreePath: null,
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-2"),
+        worktreePath: "   ",
+      }),
+      makeThread({
+        id: ThreadId.makeUnsafe("thread-3"),
+        worktreePath: "/tmp/repo/worktrees/feature-a",
+      }),
+    ];
+
+    expect(
+      getOrphanedWorktreePathsForDeletedThreads(
+        threads,
+        new Set([
+          ThreadId.makeUnsafe("thread-1"),
+          ThreadId.makeUnsafe("thread-2"),
+          ThreadId.makeUnsafe("thread-3"),
+        ]),
+      ),
+    ).toEqual(["/tmp/repo/worktrees/feature-a"]);
   });
 });
 

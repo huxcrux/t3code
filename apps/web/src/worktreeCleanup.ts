@@ -8,28 +8,40 @@ function normalizeWorktreePath(path: string | null): string | null {
   return trimmed;
 }
 
+export function getOrphanedWorktreePathsForDeletedThreads(
+  threads: readonly Thread[],
+  deletedThreadIds: ReadonlySet<Thread["id"]>,
+): string[] {
+  if (deletedThreadIds.size === 0) {
+    return [];
+  }
+
+  const deletedPaths = new Set<string>();
+  const survivingPaths = new Set<string>();
+
+  for (const thread of threads) {
+    const normalizedPath = normalizeWorktreePath(thread.worktreePath);
+    if (!normalizedPath) {
+      continue;
+    }
+
+    if (deletedThreadIds.has(thread.id)) {
+      deletedPaths.add(normalizedPath);
+      continue;
+    }
+
+    survivingPaths.add(normalizedPath);
+  }
+
+  return [...deletedPaths].filter((path) => !survivingPaths.has(path));
+}
+
 export function getOrphanedWorktreePathForThread(
   threads: readonly Thread[],
   threadId: Thread["id"],
 ): string | null {
-  const targetThread = threads.find((thread) => thread.id === threadId);
-  if (!targetThread) {
-    return null;
-  }
-
-  const targetWorktreePath = normalizeWorktreePath(targetThread.worktreePath);
-  if (!targetWorktreePath) {
-    return null;
-  }
-
-  const isShared = threads.some((thread) => {
-    if (thread.id === threadId) {
-      return false;
-    }
-    return normalizeWorktreePath(thread.worktreePath) === targetWorktreePath;
-  });
-
-  return isShared ? null : targetWorktreePath;
+  const orphanedPaths = getOrphanedWorktreePathsForDeletedThreads(threads, new Set([threadId]));
+  return orphanedPaths[0] ?? null;
 }
 
 export function formatWorktreePathForDisplay(worktreePath: string): string {
