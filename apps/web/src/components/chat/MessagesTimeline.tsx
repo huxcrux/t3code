@@ -41,7 +41,11 @@ import { ProposedPlanCard } from "./ProposedPlanCard";
 import { ChangedFilesTree } from "./ChangedFilesTree";
 import { DiffStatLabel, hasNonZeroStat } from "./DiffStatLabel";
 import { MessageCopyButton } from "./MessageCopyButton";
-import { computeMessageDurationStart, normalizeCompactToolLabel } from "./MessagesTimeline.logic";
+import {
+  normalizeCompactToolLabel,
+  resolveMessagesTimelineRows,
+  type MessagesTimelineRow,
+} from "./MessagesTimeline.logic";
 import { TerminalContextInlineChip } from "./TerminalContextInlineChip";
 import {
   deriveDisplayedUserMessageState,
@@ -134,80 +138,23 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     };
   }, [hasMessages, isWorking]);
 
-  const rows = useMemo<TimelineRow[]>(() => {
-    const nextRows: TimelineRow[] = [];
-    const durationStartByMessageId = computeMessageDurationStart(
-      timelineEntries.flatMap((entry) => (entry.kind === "message" ? [entry.message] : [])),
-    );
-
-    for (let index = 0; index < timelineEntries.length; index += 1) {
-      const timelineEntry = timelineEntries[index];
-      if (!timelineEntry) {
-        continue;
-      }
-
-      if (timelineEntry.kind === "work") {
-        const groupedEntries = [timelineEntry.entry];
-        let cursor = index + 1;
-        while (cursor < timelineEntries.length) {
-          const nextEntry = timelineEntries[cursor];
-          if (!nextEntry || nextEntry.kind !== "work") break;
-          groupedEntries.push(nextEntry.entry);
-          cursor += 1;
-        }
-        nextRows.push({
-          kind: "work",
-          id: timelineEntry.id,
-          createdAt: timelineEntry.createdAt,
-          groupedEntries,
-        });
-        index = cursor - 1;
-        continue;
-      }
-
-      if (timelineEntry.kind === "proposed-plan") {
-        nextRows.push({
-          kind: "proposed-plan",
-          id: timelineEntry.id,
-          createdAt: timelineEntry.createdAt,
-          proposedPlan: timelineEntry.proposedPlan,
-        });
-        continue;
-      }
-
-      nextRows.push({
-        kind: "message",
-        id: timelineEntry.id,
-        createdAt: timelineEntry.createdAt,
-        message: timelineEntry.message,
-        assistantDiffSummary:
-          timelineEntry.message.role === "assistant"
-            ? (turnDiffSummaryByAssistantMessageId.get(timelineEntry.message.id) ?? null)
-            : null,
-        durationStart:
-          durationStartByMessageId.get(timelineEntry.message.id) ?? timelineEntry.message.createdAt,
-        showCompletionDivider:
-          timelineEntry.message.role === "assistant" &&
-          completionDividerBeforeEntryId === timelineEntry.id,
-      });
-    }
-
-    if (isWorking) {
-      nextRows.push({
-        kind: "working",
-        id: "working-indicator-row",
-        createdAt: activeTurnStartedAt,
-      });
-    }
-
-    return nextRows;
-  }, [
-    timelineEntries,
-    completionDividerBeforeEntryId,
-    isWorking,
-    activeTurnStartedAt,
-    turnDiffSummaryByAssistantMessageId,
-  ]);
+  const rows = useMemo<MessagesTimelineRow[]>(
+    () =>
+      resolveMessagesTimelineRows({
+        timelineEntries,
+        completionDividerBeforeEntryId,
+        turnDiffSummaryByAssistantMessageId,
+        isWorking,
+        activeTurnStartedAt,
+      }),
+    [
+      timelineEntries,
+      completionDividerBeforeEntryId,
+      turnDiffSummaryByAssistantMessageId,
+      isWorking,
+      activeTurnStartedAt,
+    ],
+  );
 
   const firstUnvirtualizedRowIndex = useMemo(() => {
     const firstTailRowIndex = Math.max(rows.length - ALWAYS_UNVIRTUALIZED_TAIL_ROWS, 0);
@@ -341,6 +288,7 @@ export const MessagesTimeline = memo(function MessagesTimeline({
     <div
       className="pb-4"
       data-timeline-row-kind={row.kind}
+      data-timeline-row-id={row.id}
       data-message-id={row.kind === "message" ? row.message.id : undefined}
       data-message-role={row.kind === "message" ? row.message.role : undefined}
     >
@@ -468,12 +416,13 @@ export const MessagesTimeline = memo(function MessagesTimeline({
         })()}
 
       {row.kind === "message" &&
-        row.message.role === "assistant" &&
+        (row.message.role === "assistant" || row.message.role === "system") &&
         (() => {
           const messageText = row.message.text || (row.message.streaming ? "" : "(empty response)");
+          const isAssistantMessage = row.message.role === "assistant";
           return (
             <>
-              {row.showCompletionDivider && (
+              {isAssistantMessage && row.showCompletionDivider && (
                 <div className="my-3 flex items-center gap-3">
                   <span className="h-px flex-1 bg-border" />
                   <span className="rounded-full border border-border bg-background px-2.5 py-1 text-[10px] uppercase tracking-[0.14em] text-muted-foreground/80">
@@ -488,62 +437,63 @@ export const MessagesTimeline = memo(function MessagesTimeline({
                   cwd={markdownCwd}
                   isStreaming={Boolean(row.message.streaming)}
                 />
-                {(() => {
-                  const turnSummary = row.assistantDiffSummary;
-                  if (!turnSummary) return null;
-                  const checkpointFiles = turnSummary.files;
-                  if (checkpointFiles.length === 0) return null;
-                  const summaryStat = summarizeTurnDiffStats(checkpointFiles);
-                  const changedFileCountLabel = String(checkpointFiles.length);
-                  const allDirectoriesExpanded =
-                    allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true;
-                  return (
-                    <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
-                      <div className="mb-1.5 flex items-center justify-between gap-2">
-                        <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
-                          <span>Changed files ({changedFileCountLabel})</span>
-                          {hasNonZeroStat(summaryStat) && (
-                            <>
-                              <span className="mx-1">•</span>
-                              <DiffStatLabel
-                                additions={summaryStat.additions}
-                                deletions={summaryStat.deletions}
-                              />
-                            </>
-                          )}
-                        </p>
-                        <div className="flex items-center gap-1.5">
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() => onToggleAllDirectories(turnSummary.turnId)}
-                          >
-                            {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
-                          </Button>
-                          <Button
-                            type="button"
-                            size="xs"
-                            variant="outline"
-                            onClick={() =>
-                              onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)
-                            }
-                          >
-                            View diff
-                          </Button>
+                {isAssistantMessage &&
+                  (() => {
+                    const turnSummary = row.assistantDiffSummary;
+                    if (!turnSummary) return null;
+                    const checkpointFiles = turnSummary.files;
+                    if (checkpointFiles.length === 0) return null;
+                    const summaryStat = summarizeTurnDiffStats(checkpointFiles);
+                    const changedFileCountLabel = String(checkpointFiles.length);
+                    const allDirectoriesExpanded =
+                      allDirectoriesExpandedByTurnId[turnSummary.turnId] ?? true;
+                    return (
+                      <div className="mt-2 rounded-lg border border-border/80 bg-card/45 p-2.5">
+                        <div className="mb-1.5 flex items-center justify-between gap-2">
+                          <p className="text-[10px] uppercase tracking-[0.12em] text-muted-foreground/65">
+                            <span>Changed files ({changedFileCountLabel})</span>
+                            {hasNonZeroStat(summaryStat) && (
+                              <>
+                                <span className="mx-1">•</span>
+                                <DiffStatLabel
+                                  additions={summaryStat.additions}
+                                  deletions={summaryStat.deletions}
+                                />
+                              </>
+                            )}
+                          </p>
+                          <div className="flex items-center gap-1.5">
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              onClick={() => onToggleAllDirectories(turnSummary.turnId)}
+                            >
+                              {allDirectoriesExpanded ? "Collapse all" : "Expand all"}
+                            </Button>
+                            <Button
+                              type="button"
+                              size="xs"
+                              variant="outline"
+                              onClick={() =>
+                                onOpenTurnDiff(turnSummary.turnId, checkpointFiles[0]?.path)
+                              }
+                            >
+                              View diff
+                            </Button>
+                          </div>
                         </div>
+                        <ChangedFilesTree
+                          key={`changed-files-tree:${turnSummary.turnId}`}
+                          turnId={turnSummary.turnId}
+                          files={checkpointFiles}
+                          allDirectoriesExpanded={allDirectoriesExpanded}
+                          resolvedTheme={resolvedTheme}
+                          onOpenTurnDiff={onOpenTurnDiff}
+                        />
                       </div>
-                      <ChangedFilesTree
-                        key={`changed-files-tree:${turnSummary.turnId}`}
-                        turnId={turnSummary.turnId}
-                        files={checkpointFiles}
-                        allDirectoriesExpanded={allDirectoriesExpanded}
-                        resolvedTheme={resolvedTheme}
-                        onOpenTurnDiff={onOpenTurnDiff}
-                      />
-                    </div>
-                  );
-                })()}
+                    );
+                  })()}
                 <p className="mt-1.5 text-[10px] text-muted-foreground/30">
                   {formatMessageMeta(
                     row.message.createdAt,
@@ -631,33 +581,9 @@ export const MessagesTimeline = memo(function MessagesTimeline({
   );
 });
 
-type TimelineEntry = ReturnType<typeof deriveTimelineEntries>[number];
-type TimelineMessage = Extract<TimelineEntry, { kind: "message" }>["message"];
-type TimelineProposedPlan = Extract<TimelineEntry, { kind: "proposed-plan" }>["proposedPlan"];
-type TimelineWorkEntry = Extract<TimelineEntry, { kind: "work" }>["entry"];
-type TimelineRow =
-  | {
-      kind: "work";
-      id: string;
-      createdAt: string;
-      groupedEntries: TimelineWorkEntry[];
-    }
-  | {
-      kind: "message";
-      id: string;
-      createdAt: string;
-      message: TimelineMessage;
-      assistantDiffSummary: TurnDiffSummary | null;
-      durationStart: string;
-      showCompletionDivider: boolean;
-    }
-  | {
-      kind: "proposed-plan";
-      id: string;
-      createdAt: string;
-      proposedPlan: TimelineProposedPlan;
-    }
-  | { kind: "working"; id: string; createdAt: string | null };
+type TimelineRow = MessagesTimelineRow;
+type TimelineMessage = Extract<TimelineRow, { kind: "message" }>["message"];
+type TimelineWorkEntry = Extract<TimelineRow, { kind: "work" }>["groupedEntries"][number];
 
 function formatWorkingTimer(startIso: string, endIso: string): string | null {
   const startedAtMs = Date.parse(startIso);

@@ -1,16 +1,55 @@
 import { ThreadId } from "@t3tools/contracts";
-import { beforeEach, describe, expect, it } from "vitest";
-
-import { selectThreadTerminalState, useTerminalStateStore } from "./terminalStateStore";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const THREAD_ID = ThreadId.makeUnsafe("thread-1");
+const TERMINAL_STATE_STORAGE_KEY = "t3code:terminal-state:v1";
+const originalLocalStorage = globalThis.localStorage;
+let selectThreadTerminalState: typeof import("./terminalStateStore").selectThreadTerminalState;
+let useTerminalStateStore: typeof import("./terminalStateStore").useTerminalStateStore;
+
+function createMemoryStorage(): Storage {
+  const storage = new Map<string, string>();
+
+  return {
+    get length() {
+      return storage.size;
+    },
+    clear() {
+      storage.clear();
+    },
+    getItem(key) {
+      return storage.get(key) ?? null;
+    },
+    key(index) {
+      return Array.from(storage.keys())[index] ?? null;
+    },
+    removeItem(key) {
+      storage.delete(key);
+    },
+    setItem(key, value) {
+      storage.set(key, value);
+    },
+  };
+}
 
 describe("terminalStateStore actions", () => {
-  beforeEach(() => {
-    if (typeof localStorage !== "undefined") {
-      localStorage.clear();
-    }
+  beforeEach(async () => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: createMemoryStorage(),
+    });
+
+    localStorage.removeItem(TERMINAL_STATE_STORAGE_KEY);
+    vi.resetModules();
+    ({ selectThreadTerminalState, useTerminalStateStore } = await import("./terminalStateStore"));
     useTerminalStateStore.setState({ terminalStateByThreadId: {} });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(globalThis, "localStorage", {
+      configurable: true,
+      value: originalLocalStorage,
+    });
   });
 
   it("returns a closed default terminal state for unknown threads", () => {
