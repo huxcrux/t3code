@@ -180,6 +180,8 @@ function createProposedPlan(input: {
     id: asProposedPlanId(input.id),
     turnId: asTurnId(`${input.id}-turn`),
     planMarkdown: input.planMarkdown,
+    implementedAt: null,
+    implementationThreadId: null,
     createdAt: input.createdAt,
     updatedAt: input.createdAt,
   };
