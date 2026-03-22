@@ -18,9 +18,8 @@ Install the [desktop app from the Releases page](https://github.com/pingdotgg/t3
 ## Some notes
 
 We are very very early in this project. Expect bugs. Contributions and feedback are welcome!
-The UI and provider integrations are still changing quickly.
 
-We are not accepting contributions yet.
+We are selectively accepting contributions — please read the guide below first.
 
 ## If you REALLY want to contribute still.... read this first
 
