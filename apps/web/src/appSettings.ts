@@ -1,7 +1,6 @@
 import { useCallback } from "react";
 import { Option, Schema } from "effect";
 import {
-  DEFAULT_GIT_TEXT_GENERATION_MODEL,
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   DEFAULT_GIT_TEXT_GENERATION_PROVIDER,
   TrimmedNonEmptyString,
@@ -64,9 +63,7 @@ export const AppSettingsSchema = Schema.Struct({
   textGenerationProvider: Schema.optional(Schema.Literals(["codex", "claudeAgent"])).pipe(
     withDefaults(() => DEFAULT_GIT_TEXT_GENERATION_PROVIDER),
   ),
-  textGenerationModel: Schema.optional(TrimmedNonEmptyString).pipe(
-    withDefaults(() => DEFAULT_GIT_TEXT_GENERATION_MODEL),
-  ),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyString),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {

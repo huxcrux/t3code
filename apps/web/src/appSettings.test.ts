@@ -218,7 +218,22 @@ describe("AppSettingsSchema", () => {
       customCodexModels: [],
       customClaudeModels: [],
       textGenerationProvider: "codex",
-      textGenerationModel: "gpt-5.4-mini",
+      textGenerationModel: undefined,
+    });
+  });
+
+  it("does not inject a codex model when decoding a claude provider selection without a model", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(
+      decode(
+        JSON.stringify({
+          textGenerationProvider: "claudeAgent",
+        }),
+      ),
+    ).toMatchObject({
+      textGenerationProvider: "claudeAgent",
+      textGenerationModel: undefined,
     });
   });
 });
