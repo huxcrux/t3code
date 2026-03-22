@@ -1,6 +1,12 @@
 import { useCallback } from "react";
 import { Option, Schema } from "effect";
-import { TrimmedNonEmptyString, type ProviderKind } from "@t3tools/contracts";
+import {
+  DEFAULT_GIT_TEXT_GENERATION_MODEL,
+  DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
+  DEFAULT_GIT_TEXT_GENERATION_PROVIDER,
+  TrimmedNonEmptyString,
+  type ProviderKind,
+} from "@t3tools/contracts";
 import {
   getDefaultModel,
   getModelOptions,
@@ -55,7 +61,12 @@ export const AppSettingsSchema = Schema.Struct({
   timestampFormat: TimestampFormat.pipe(withDefaults(() => DEFAULT_TIMESTAMP_FORMAT)),
   customCodexModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
   customClaudeModels: Schema.Array(Schema.String).pipe(withDefaults(() => [])),
-  textGenerationModel: Schema.optional(TrimmedNonEmptyString),
+  textGenerationProvider: Schema.optional(Schema.Literals(["codex", "claudeAgent"])).pipe(
+    withDefaults(() => DEFAULT_GIT_TEXT_GENERATION_PROVIDER),
+  ),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyString).pipe(
+    withDefaults(() => DEFAULT_GIT_TEXT_GENERATION_MODEL),
+  ),
 });
 export type AppSettings = typeof AppSettingsSchema.Type;
 export interface AppModelOption {
@@ -117,10 +128,24 @@ export function normalizeCustomModelSlugs(
 }
 
 function normalizeAppSettings(settings: AppSettings): AppSettings {
+  const textGenerationProvider =
+    settings.textGenerationProvider ?? DEFAULT_GIT_TEXT_GENERATION_PROVIDER;
+  const customModelsByProvider = {
+    codex: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
+    claudeAgent: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
+  } as const;
+
   return {
     ...settings,
-    customCodexModels: normalizeCustomModelSlugs(settings.customCodexModels, "codex"),
-    customClaudeModels: normalizeCustomModelSlugs(settings.customClaudeModels, "claudeAgent"),
+    customCodexModels: customModelsByProvider.codex,
+    customClaudeModels: customModelsByProvider.claudeAgent,
+    textGenerationProvider,
+    textGenerationModel: resolveAppModelSelection(
+      textGenerationProvider,
+      customModelsByProvider,
+      settings.textGenerationModel ??
+        DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER[textGenerationProvider],
+    ),
   };
 }
 

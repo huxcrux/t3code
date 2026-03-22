@@ -635,6 +635,7 @@ export const makeGitManager = Effect.gen(function* () {
   const resolveCommitAndBranchSuggestion = (input: {
     cwd: string;
     branch: string | null;
+    textGenerationProvider?: "codex" | "claudeAgent";
     commitMessage?: string;
     /** When true, also produce a semantic feature branch name. */
     includeBranch?: boolean;
@@ -662,6 +663,7 @@ export const makeGitManager = Effect.gen(function* () {
       const generated = yield* textGeneration
         .generateCommitMessage({
           cwd: input.cwd,
+          ...(input.textGenerationProvider ? { provider: input.textGenerationProvider } : {}),
           branch: input.branch,
           stagedSummary: limitContext(context.stagedSummary, 8_000),
           stagedPatch: limitContext(context.stagedPatch, 50_000),
@@ -684,6 +686,7 @@ export const makeGitManager = Effect.gen(function* () {
     commitMessage?: string,
     preResolvedSuggestion?: CommitAndBranchSuggestion,
     filePaths?: readonly string[],
+    textGenerationProvider?: "codex" | "claudeAgent",
     model?: string,
   ) =>
     Effect.gen(function* () {
@@ -692,6 +695,7 @@ export const makeGitManager = Effect.gen(function* () {
         (yield* resolveCommitAndBranchSuggestion({
           cwd,
           branch,
+          ...(textGenerationProvider ? { textGenerationProvider } : {}),
           ...(commitMessage ? { commitMessage } : {}),
           ...(filePaths ? { filePaths } : {}),
           ...(model ? { model } : {}),
@@ -708,7 +712,12 @@ export const makeGitManager = Effect.gen(function* () {
       };
     });
 
-  const runPrStep = (cwd: string, fallbackBranch: string | null, model?: string) =>
+  const runPrStep = (
+    cwd: string,
+    fallbackBranch: string | null,
+    textGenerationProvider?: "codex" | "claudeAgent",
+    model?: string,
+  ) =>
     Effect.gen(function* () {
       const details = yield* gitCore.statusDetails(cwd);
       const branch = details.branch ?? fallbackBranch;
@@ -747,6 +756,7 @@ export const makeGitManager = Effect.gen(function* () {
 
       const generated = yield* textGeneration.generatePrContent({
         cwd,
+        ...(textGenerationProvider ? { provider: textGenerationProvider } : {}),
         baseBranch,
         headBranch: headContext.headBranch,
         commitSummary: limitContext(rangeContext.commitSummary, 20_000),
@@ -977,12 +987,14 @@ export const makeGitManager = Effect.gen(function* () {
     branch: string | null,
     commitMessage?: string,
     filePaths?: readonly string[],
+    textGenerationProvider?: "codex" | "claudeAgent",
     model?: string,
   ) =>
     Effect.gen(function* () {
       const suggestion = yield* resolveCommitAndBranchSuggestion({
         cwd,
         branch,
+        ...(textGenerationProvider ? { textGenerationProvider } : {}),
         ...(commitMessage ? { commitMessage } : {}),
         ...(filePaths ? { filePaths } : {}),
         includeBranch: true,
@@ -1035,6 +1047,7 @@ export const makeGitManager = Effect.gen(function* () {
           initialStatus.branch,
           input.commitMessage,
           input.filePaths,
+          input.textGenerationProvider,
           input.textGenerationModel,
         );
         branchStep = result.branchStep;
@@ -1052,6 +1065,7 @@ export const makeGitManager = Effect.gen(function* () {
         commitMessageForStep,
         preResolvedCommitSuggestion,
         input.filePaths,
+        input.textGenerationProvider,
         input.textGenerationModel,
       );
 
@@ -1060,7 +1074,12 @@ export const makeGitManager = Effect.gen(function* () {
         : { status: "skipped_not_requested" as const };
 
       const pr = wantsPr
-        ? yield* runPrStep(input.cwd, currentBranch, input.textGenerationModel)
+        ? yield* runPrStep(
+            input.cwd,
+            currentBranch,
+            input.textGenerationProvider,
+            input.textGenerationModel,
+          )
         : { status: "skipped_not_requested" as const };
 
       return {

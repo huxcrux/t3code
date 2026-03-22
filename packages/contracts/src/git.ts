@@ -1,6 +1,7 @@
 import { Option, Schema } from "effect";
 import { NonNegativeInt, PositiveInt, TrimmedNonEmptyString } from "./baseSchemas";
-import { DEFAULT_GIT_TEXT_GENERATION_MODEL } from "./model";
+import { DEFAULT_GIT_TEXT_GENERATION_PROVIDER } from "./model";
+import { ProviderKind } from "./orchestration";
 
 const TrimmedNonEmptyStringSchema = TrimmedNonEmptyString;
 
@@ -65,9 +66,10 @@ export const GitRunStackedActionInput = Schema.Struct({
   filePaths: Schema.optional(
     Schema.Array(TrimmedNonEmptyStringSchema).check(Schema.isMinLength(1)),
   ),
-  textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema).pipe(
-    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_MODEL)),
+  textGenerationProvider: Schema.optional(ProviderKind).pipe(
+    Schema.withConstructorDefault(() => Option.some(DEFAULT_GIT_TEXT_GENERATION_PROVIDER)),
   ),
+  textGenerationModel: Schema.optional(TrimmedNonEmptyStringSchema),
 });
 export type GitRunStackedActionInput = typeof GitRunStackedActionInput.Type;
 

@@ -112,6 +112,7 @@ export function gitCheckoutMutationOptions(input: {
 export function gitRunStackedActionMutationOptions(input: {
   cwd: string | null;
   queryClient: QueryClient;
+  provider?: "codex" | "claudeAgent" | null;
   model?: string | null;
 }) {
   return mutationOptions({
@@ -135,7 +136,8 @@ export function gitRunStackedActionMutationOptions(input: {
         ...(commitMessage ? { commitMessage } : {}),
         ...(featureBranch ? { featureBranch } : {}),
         ...(filePaths ? { filePaths } : {}),
-        ...(input.model ? { model: input.model } : {}),
+        ...(input.provider ? { textGenerationProvider: input.provider } : {}),
+        ...(input.model ? { textGenerationModel: input.model } : {}),
       });
     },
     onSettled: async () => {

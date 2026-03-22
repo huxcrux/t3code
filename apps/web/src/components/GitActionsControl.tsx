@@ -196,6 +196,7 @@ export default function GitActionsControl({ gitCwd, activeThreadId }: GitActions
     gitRunStackedActionMutationOptions({
       cwd: gitCwd,
       queryClient,
+      provider: settings.textGenerationProvider ?? "codex",
       model: settings.textGenerationModel ?? null,
     }),
   );

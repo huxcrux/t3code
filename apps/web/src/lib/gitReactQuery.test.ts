@@ -1,11 +1,21 @@
 import { QueryClient } from "@tanstack/react-query";
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
   gitMutationKeys,
   gitPreparePullRequestThreadMutationOptions,
   gitPullMutationOptions,
   gitRunStackedActionMutationOptions,
 } from "./gitReactQuery";
+
+const runStackedActionMock = vi.fn();
+
+vi.mock("../nativeApi", () => ({
+  ensureNativeApi: () => ({
+    git: {
+      runStackedAction: runStackedActionMock,
+    },
+  }),
+}));
 
 describe("gitMutationKeys", () => {
   it("scopes stacked action keys by cwd", () => {
@@ -28,6 +38,11 @@ describe("gitMutationKeys", () => {
 describe("git mutation options", () => {
   const queryClient = new QueryClient();
 
+  beforeEach(() => {
+    runStackedActionMock.mockReset();
+    runStackedActionMock.mockResolvedValue({ ok: true });
+  });
+
   it("attaches cwd-scoped mutation key for runStackedAction", () => {
     const options = gitRunStackedActionMutationOptions({ cwd: "/repo/a", queryClient });
     expect(options.mutationKey).toEqual(gitMutationKeys.runStackedAction("/repo/a"));
@@ -44,5 +59,28 @@ describe("git mutation options", () => {
       queryClient,
     });
     expect(options.mutationKey).toEqual(gitMutationKeys.preparePullRequestThread("/repo/a"));
+  });
+
+  it("passes provider and model to runStackedAction requests", async () => {
+    const options = gitRunStackedActionMutationOptions({
+      cwd: "/repo/a",
+      queryClient,
+      provider: "claudeAgent",
+      model: "claude-haiku-4-5",
+    });
+
+    await options.mutationFn?.(
+      {
+        action: "commit",
+      },
+      {} as never,
+    );
+
+    expect(runStackedActionMock).toHaveBeenCalledWith({
+      cwd: "/repo/a",
+      action: "commit",
+      textGenerationProvider: "claudeAgent",
+      textGenerationModel: "claude-haiku-4-5",
+    });
   });
 });

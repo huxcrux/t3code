@@ -44,25 +44,31 @@ interface FakeGhScenario {
 interface FakeGitTextGeneration {
   generateCommitMessage: (input: {
     cwd: string;
+    provider?: "codex" | "claudeAgent";
     branch: string | null;
     stagedSummary: string;
     stagedPatch: string;
     includeBranch?: boolean;
+    model?: string;
   }) => Effect.Effect<
     { subject: string; body: string; branch?: string | undefined },
     TextGenerationError
   >;
   generatePrContent: (input: {
     cwd: string;
+    provider?: "codex" | "claudeAgent";
     baseBranch: string;
     headBranch: string;
     commitSummary: string;
     diffSummary: string;
     diffPatch: string;
+    model?: string;
   }) => Effect.Effect<{ title: string; body: string }, TextGenerationError>;
   generateBranchName: (input: {
     cwd: string;
+    provider?: "codex" | "claudeAgent";
     message: string;
+    model?: string;
   }) => Effect.Effect<{ branch: string }, TextGenerationError>;
 }
 
@@ -98,6 +104,13 @@ function makeTempDir(
     const fileSystem = yield* FileSystem.FileSystem;
     return yield* fileSystem.makeTempDirectoryScoped({ prefix });
   });
+}
+
+function toProviderModelCall(input: { provider?: string; model?: string }) {
+  return {
+    ...(input.provider ? { provider: input.provider } : {}),
+    ...(input.model ? { model: input.model } : {}),
+  };
 }
 
 function runGit(
@@ -453,6 +466,8 @@ function runStackedAction(
     commitMessage?: string;
     featureBranch?: boolean;
     filePaths?: readonly string[];
+    textGenerationProvider?: "codex" | "claudeAgent";
+    textGenerationModel?: string;
   },
 ) {
   return manager.runStackedAction(input);
@@ -905,6 +920,46 @@ it.layer(GitManagerTestLayer)("GitManager", (it) => {
       expect(result.commit.status).toBe("skipped_no_changes");
       expect(result.push.status).toBe("skipped_not_requested");
       expect(result.pr.status).toBe("skipped_not_requested");
+    }),
+  );
+
+  it.effect("passes text generation provider and model through git generation steps", () =>
+    Effect.gen(function* () {
+      const repoDir = yield* makeTempDir("t3code-git-manager-");
+      yield* initRepo(repoDir);
+      const commitCalls: Array<{ provider?: string; model?: string }> = [];
+      const prCalls: Array<{ provider?: string; model?: string }> = [];
+      const { manager } = yield* makeManager({
+        textGeneration: {
+          generateCommitMessage: (input) => {
+            commitCalls.push(toProviderModelCall(input));
+            return Effect.succeed({ subject: "Add generated change", body: "" });
+          },
+          generatePrContent: (input) => {
+            prCalls.push(toProviderModelCall(input));
+            return Effect.succeed({
+              title: "Add generated change",
+              body: "## Summary\n- Add generated change\n\n## Testing\n- Not run",
+            });
+          },
+        },
+      });
+      const remoteDir = yield* createBareRemote();
+      yield* runGit(repoDir, ["remote", "add", "origin", remoteDir]);
+      yield* runGit(repoDir, ["checkout", "-b", "feature/provider-routing"]);
+      fs.writeFileSync(path.join(repoDir, "provider.txt"), "content\n");
+      yield* runGit(repoDir, ["add", "provider.txt"]);
+
+      const result = yield* runStackedAction(manager, {
+        cwd: repoDir,
+        action: "commit_push_pr",
+        textGenerationProvider: "claudeAgent",
+        textGenerationModel: "claude-haiku-4-5",
+      });
+
+      expect(result.commit.status).toBe("created");
+      expect(commitCalls).toEqual([{ provider: "claudeAgent", model: "claude-haiku-4-5" }]);
+      expect(prCalls).toEqual([{ provider: "claudeAgent", model: "claude-haiku-4-5" }]);
     }),
   );
 

@@ -217,6 +217,8 @@ describe("AppSettingsSchema", () => {
       timestampFormat: DEFAULT_TIMESTAMP_FORMAT,
       customCodexModels: [],
       customClaudeModels: [],
+      textGenerationProvider: "codex",
+      textGenerationModel: "gpt-5.4-mini",
     });
   });
 });
