@@ -17,7 +17,7 @@ Install the [desktop app from the Releases page](https://github.com/pingdotgg/t3
 
 ## Some notes
 
-We are very very early in this project. Expect bugs.
+We are very very early in this project. Expect bugs. Contributions and feedback are welcome!
 
 We are not accepting contributions yet.
 
