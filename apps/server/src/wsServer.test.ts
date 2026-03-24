@@ -1921,6 +1921,7 @@ describe("WebSocket Server", () => {
     connections.push(ws);
 
     const response = await sendRequest(ws, WS_METHODS.gitRunStackedAction, {
+      actionId: "action-1",
       cwd: "/test",
       action: "commit_push",
       modelSelection: {
@@ -1931,6 +1932,7 @@ describe("WebSocket Server", () => {
     expect(response.result).toBeUndefined();
     expect(response.error?.message).toContain("detached HEAD");
     expect(runStackedAction).toHaveBeenCalledWith({
+      actionId: "action-1",
       cwd: "/test",
       action: "commit_push",
       modelSelection: {
