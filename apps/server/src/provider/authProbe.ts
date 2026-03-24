@@ -72,13 +72,10 @@ export function readAuthProbeDetails(result: CommandJsonOutput): {
   readonly auth: boolean | undefined;
   readonly plan?: string;
 } {
-  const trimmed = result.stdout.trim();
-  const attemptedJsonParse =
-    trimmed.length > 0 && (trimmed.startsWith("{") || trimmed.startsWith("["));
   const parsedJson = parseJsonOutput(result);
   const plan = extractPlanLabel(parsedJson);
   return {
-    attemptedJsonParse,
+    attemptedJsonParse: parsedJson !== undefined,
     auth: extractAuthBoolean(parsedJson),
     ...(plan ? { plan } : {}),
   };
