@@ -607,7 +607,7 @@ export const checkClaudeProviderStatus: Effect.Effect<
 
 // ── Auth action helpers ──────────────────────────────────────────────
 
-const LOGIN_TIMEOUT_MS = 30_000;
+const LOGIN_TIMEOUT_MS = 120_000;
 const LOGOUT_TIMEOUT_MS = 10_000;
 
 function loginArgs(provider: ProviderKind): {
