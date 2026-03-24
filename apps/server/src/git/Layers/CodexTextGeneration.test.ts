@@ -94,7 +94,7 @@ function makeFakeCodexBinary(dir: string) {
         '  printf "%s\\n" "$T3_FAKE_CODEX_STDERR" >&2',
         "fi",
         'if [ -n "$output_path" ]; then',
-        '  node -e \'const fs=require("node:fs"); const value=process.argv[2] ?? ""; fs.writeFileSync(process.argv[1], Buffer.from(value, "base64"));\' "$output_path" "${T3_FAKE_CODEX_OUTPUT_B64:-e30=}"',
+        '  bun -e \'const fs=require("node:fs"); const value=process.argv[2] ?? ""; fs.writeFileSync(process.argv[1], Buffer.from(value, "base64"));\' "$output_path" "${T3_FAKE_CODEX_OUTPUT_B64:-e30=}"',
         "fi",
         'exit "${T3_FAKE_CODEX_EXIT_CODE:-0}"',
         "",
