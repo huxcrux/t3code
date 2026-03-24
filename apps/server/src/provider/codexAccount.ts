@@ -1,4 +1,4 @@
-import { Effect, Option, Ref, Stream } from "effect";
+import { Effect, Exit, Option, Ref, Schema, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { extractPlanLabel } from "./authProbe";
 
@@ -24,6 +24,50 @@ const APP_SERVER_PROBE_TIMEOUT_MS = 4_000;
 const APP_SERVER_INITIALIZE_REQUEST_ID = 1;
 const APP_SERVER_ACCOUNT_READ_REQUEST_ID = 2;
 const encoder = new TextEncoder();
+
+const AppServerInitializeRequestSchema = Schema.Struct({
+  id: Schema.Literal(APP_SERVER_INITIALIZE_REQUEST_ID),
+  method: Schema.Literal("initialize"),
+  params: Schema.Struct({
+    clientInfo: Schema.Struct({
+      name: Schema.String,
+      title: Schema.String,
+      version: Schema.String,
+    }),
+    capabilities: Schema.Struct({
+      experimentalApi: Schema.Boolean,
+    }),
+  }),
+});
+
+const AppServerInitializedNotificationSchema = Schema.Struct({
+  method: Schema.Literal("initialized"),
+});
+
+const AppServerAccountReadRequestSchema = Schema.Struct({
+  id: Schema.Literal(APP_SERVER_ACCOUNT_READ_REQUEST_ID),
+  method: Schema.Literal("account/read"),
+  params: Schema.Struct({}),
+});
+
+const AppServerResponseSchema = Schema.Struct({
+  id: Schema.Union([Schema.Number, Schema.String]),
+  result: Schema.optional(Schema.Unknown),
+  error: Schema.optional(Schema.Unknown),
+});
+
+const encodeAppServerInitializeRequest = Schema.encodeSync(
+  Schema.fromJsonString(AppServerInitializeRequestSchema),
+);
+const encodeAppServerInitializedNotification = Schema.encodeSync(
+  Schema.fromJsonString(AppServerInitializedNotificationSchema),
+);
+const encodeAppServerAccountReadRequest = Schema.encodeSync(
+  Schema.fromJsonString(AppServerAccountReadRequestSchema),
+);
+const decodeAppServerResponse = Schema.decodeUnknownExit(
+  Schema.fromJsonString(AppServerResponseSchema),
+);
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -95,8 +139,8 @@ export function extractCodexAccountPlan(response: unknown): string | undefined {
   return extractPlanLabel(record.result ?? response);
 }
 
-function encodeJsonRpcMessage(message: unknown): Uint8Array {
-  return encoder.encode(`${JSON.stringify(message)}\n`);
+function encodeJsonRpcMessage(message: string): Uint8Array {
+  return encoder.encode(`${message}\n`);
 }
 
 export function readCodexAccountPlanViaAppServer(): Effect.Effect<
@@ -114,17 +158,21 @@ export function readCodexAccountPlanViaAppServer(): Effect.Effect<
       shell: process.platform === "win32",
       stdin: {
         stream: Stream.make(
-          encodeJsonRpcMessage({
-            id: APP_SERVER_INITIALIZE_REQUEST_ID,
-            method: "initialize",
-            params: buildCodexInitializeParams(),
-          }),
-          encodeJsonRpcMessage({ method: "initialized" }),
-          encodeJsonRpcMessage({
-            id: APP_SERVER_ACCOUNT_READ_REQUEST_ID,
-            method: "account/read",
-            params: {},
-          }),
+          encodeJsonRpcMessage(
+            encodeAppServerInitializeRequest({
+              id: APP_SERVER_INITIALIZE_REQUEST_ID,
+              method: "initialize",
+              params: buildCodexInitializeParams(),
+            }),
+          ),
+          encodeJsonRpcMessage(encodeAppServerInitializedNotification({ method: "initialized" })),
+          encodeJsonRpcMessage(
+            encodeAppServerAccountReadRequest({
+              id: APP_SERVER_ACCOUNT_READ_REQUEST_ID,
+              method: "account/read",
+              params: {},
+            }),
+          ),
         ),
       },
     });
@@ -132,15 +180,11 @@ export function readCodexAccountPlanViaAppServer(): Effect.Effect<
     yield* spawner.streamLines(command).pipe(
       Stream.runForEachWhile((line) =>
         Effect.gen(function* () {
-          const parsed = (() => {
-            try {
-              return JSON.parse(line);
-            } catch {
-              return null;
-            }
-          })();
-          const record = asObject(parsed);
-          if (!record) return true;
+          const decoded = decodeAppServerResponse(line);
+          if (Exit.isFailure(decoded)) {
+            return true;
+          }
+          const record = decoded.value;
           const id = record.id;
           if (id === APP_SERVER_INITIALIZE_REQUEST_ID) {
             if (record.error && typeof record.error === "object") {
