@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import readline from "node:readline";
 
 import { Effect, Option } from "effect";
+import { extractPlanLabel } from "./authProbe";
 
 export type CodexPlanType =
   | "free"
@@ -32,35 +33,6 @@ function asObject(value: unknown): Record<string, unknown> | undefined {
 
 function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
-}
-
-function nonEmptyTrimmed(value: string | undefined): string | undefined {
-  if (!value) return undefined;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
-}
-
-function extractPlanLabel(value: unknown): string | undefined {
-  if (Array.isArray(value)) {
-    for (const entry of value) {
-      const nested = extractPlanLabel(entry);
-      if (nested !== undefined) return nested;
-    }
-    return undefined;
-  }
-
-  if (!value || typeof value !== "object") return undefined;
-
-  const record = value as Record<string, unknown>;
-  for (const key of ["planType", "subscriptionType", "plan", "subscription"] as const) {
-    const candidate = nonEmptyTrimmed(typeof record[key] === "string" ? record[key] : undefined);
-    if (candidate !== undefined) return candidate;
-  }
-  for (const key of ["auth", "status", "session", "account"] as const) {
-    const nested = extractPlanLabel(record[key]);
-    if (nested !== undefined) return nested;
-  }
-  return undefined;
 }
 
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
@@ -124,8 +96,13 @@ export function extractCodexAccountPlan(response: unknown): string | undefined {
 
 export function readCodexAccountPlanViaAppServer(): Effect.Effect<string | undefined, never> {
   return Effect.tryPromise(
-    () =>
+    (signal) =>
       new Promise<string | undefined>((resolve, reject) => {
+        if (signal.aborted) {
+          reject(new Error("Codex app-server probe aborted before spawn."));
+          return;
+        }
+
         const child = spawn("codex", ["app-server"], {
           stdio: ["pipe", "pipe", "ignore"],
           shell: process.platform === "win32",
@@ -135,7 +112,9 @@ export function readCodexAccountPlanViaAppServer(): Effect.Effect<string | undef
         let nextId = 1;
 
         const cleanup = () => {
+          signal.removeEventListener("abort", onAbort);
           output.close();
+          child.stdin.destroy();
           if (!child.killed) {
             child.kill();
           }
@@ -155,7 +134,12 @@ export function readCodexAccountPlanViaAppServer(): Effect.Effect<string | undef
           resolve(plan);
         };
 
+        const onAbort = () => fail(new Error("Codex app-server probe aborted."));
+
+        signal.addEventListener("abort", onAbort, { once: true });
+
         const sendMessage = (message: unknown) => {
+          if (child.stdin.destroyed) return;
           child.stdin.write(`${JSON.stringify(message)}\n`);
         };
 
