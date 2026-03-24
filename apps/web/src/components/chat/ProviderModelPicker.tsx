@@ -73,13 +73,6 @@ function isProviderUsable(
   return true;
 }
 
-function providerMetaLabel(
-  status: ServerProviderStatus | undefined,
-  enabledBySettings: boolean,
-): string | null {
-  return providerIssueLabel(status, enabledBySettings);
-}
-
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
@@ -103,6 +96,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     activeProviderStatus.status === "ready" &&
     activeProviderStatus.available &&
     activeProviderStatus.authStatus === "authenticated";
+  const lockedProviderStatus =
+    props.lockedProvider === null
+      ? undefined
+      : props.providerStatuses?.find((status) => status.provider === props.lockedProvider);
   const isActiveProviderUsable = isProviderUsable(
     activeProviderStatus,
     props.enabledProviders[activeProvider] !== false,
@@ -112,6 +109,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
   const handleModelChange = (provider: ProviderKind, value: string) => {
+    if (props.disabled) return;
     const status = props.providerStatuses?.find((s) => s.provider === provider);
     if (!isProviderUsable(status, props.enabledProviders[provider] !== false)) return;
     if (!value) return;
@@ -125,9 +123,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     setIsMenuOpen(false);
   };
 
-  // Allow opening the menu even when the active provider is unusable,
-  // so the user can switch to a working provider.
-  const canOpenMenu = !props.disabled || !isActiveProviderUsable;
+  const canOpenMenu = !props.disabled;
 
   return (
     <Menu
@@ -184,16 +180,24 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
               value={props.model}
               onValueChange={(value) => handleModelChange(props.lockedProvider!, value)}
             >
-              {props.modelOptionsByProvider[props.lockedProvider].map((modelOption) => (
-                <MenuRadioItem
-                  key={`${props.lockedProvider}:${modelOption.slug}`}
-                  value={modelOption.slug}
-                  disabled={props.enabledProviders[props.lockedProvider!] === false}
-                  onClick={() => setIsMenuOpen(false)}
-                >
-                  {modelOption.name}
-                </MenuRadioItem>
-              ))}
+              {props.modelOptionsByProvider[props.lockedProvider].map((modelOption) => {
+                return (
+                  <MenuRadioItem
+                    key={`${props.lockedProvider}:${modelOption.slug}`}
+                    value={modelOption.slug}
+                    disabled={
+                      props.disabled ||
+                      !isProviderUsable(
+                        lockedProviderStatus,
+                        props.enabledProviders[props.lockedProvider!] !== false,
+                      )
+                    }
+                    onClick={() => setIsMenuOpen(false)}
+                  >
+                    {modelOption.name}
+                  </MenuRadioItem>
+                );
+              })}
             </MenuRadioGroup>
           </MenuGroup>
         ) : (
@@ -205,7 +209,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 optionStatus,
                 props.enabledProviders[option.value] !== false,
               );
-              const metaLabel = providerMetaLabel(
+              const metaLabel = providerIssueLabel(
                 optionStatus,
                 props.enabledProviders[option.value] !== false,
               );

@@ -436,6 +436,7 @@ export const checkCodexProviderStatus: Effect.Effect<
         error instanceof Error
           ? `Could not verify Codex authentication status: ${error.message}.`
           : "Could not verify Codex authentication status.",
+      ...(parsedVersion ? { version: parsedVersion } : {}),
     };
   }
 
@@ -447,6 +448,7 @@ export const checkCodexProviderStatus: Effect.Effect<
       authStatus: "unknown" as const,
       checkedAt,
       message: "Could not verify Codex authentication status. Timed out while running command.",
+      ...(parsedVersion ? { version: parsedVersion } : {}),
     };
   }
 
@@ -722,12 +724,12 @@ export const ProviderHealthLive = Layer.effect(
           Effect.provideService(Path.Path, path),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );
-        const currentStatuses = yield* Ref.get(statusesRef);
-        const providers = currentStatuses.map((status) =>
-          status.provider === provider ? nextStatus : status,
-        );
-        yield* Ref.set(statusesRef, providers);
-        return providers;
+        return yield* Ref.modify(statusesRef, (currentStatuses) => {
+          const providers = currentStatuses.map((status) =>
+            status.provider === provider ? nextStatus : status,
+          );
+          return [providers, providers] as const;
+        });
       });
 
     const runAuthAction = (
