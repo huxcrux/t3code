@@ -132,6 +132,41 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       ),
     );
 
+    it.effect("reads the codex plan via app-server when login status omits it", () =>
+      Effect.gen(function* () {
+        yield* withTempCodexHome();
+        const status = yield* checkCodexProviderStatus;
+        assert.strictEqual(status.provider, "codex");
+        assert.strictEqual(status.status, "ready");
+        assert.strictEqual(status.available, true);
+        assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.plan, "team");
+      }).pipe(
+        Effect.provide(
+          mockSpawnerLayer((args) => {
+            const joined = args.join(" ");
+            if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
+            if (joined === "login status") {
+              return {
+                stdout: '{"authenticated":true}\n',
+                stderr: "",
+                code: 0,
+              };
+            }
+            if (joined === "app-server") {
+              return {
+                stdout:
+                  '{"id":1,"result":{}}\n{"id":2,"result":{"account":{"type":"chatgpt","planType":"team"}}}\n',
+                stderr: "",
+                code: 0,
+              };
+            }
+            throw new Error(`Unexpected args: ${joined}`);
+          }),
+        ),
+      ),
+    );
+
     it.effect("returns unavailable when codex is missing", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();

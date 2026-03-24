@@ -1,7 +1,5 @@
-import { spawn } from "node:child_process";
-import readline from "node:readline";
-
-import { Effect, Option } from "effect";
+import { Effect, Option, Ref, Stream } from "effect";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { extractPlanLabel } from "./authProbe";
 
 export type CodexPlanType =
@@ -23,6 +21,9 @@ export interface CodexAccountSnapshot {
 
 const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "plus"]);
 const APP_SERVER_PROBE_TIMEOUT_MS = 4_000;
+const APP_SERVER_INITIALIZE_REQUEST_ID = 1;
+const APP_SERVER_ACCOUNT_READ_REQUEST_ID = 2;
+const encoder = new TextEncoder();
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
   if (!value || typeof value !== "object") {
@@ -94,103 +95,80 @@ export function extractCodexAccountPlan(response: unknown): string | undefined {
   return extractPlanLabel(record.result ?? response);
 }
 
-export function readCodexAccountPlanViaAppServer(): Effect.Effect<string | undefined, never> {
-  return Effect.tryPromise(
-    (signal) =>
-      new Promise<string | undefined>((resolve, reject) => {
-        if (signal.aborted) {
-          reject(new Error("Codex app-server probe aborted before spawn."));
-          return;
-        }
+function encodeJsonRpcMessage(message: unknown): Uint8Array {
+  return encoder.encode(`${JSON.stringify(message)}\n`);
+}
 
-        const child = spawn("codex", ["app-server"], {
-          stdio: ["pipe", "pipe", "ignore"],
-          shell: process.platform === "win32",
-        });
-        const output = readline.createInterface({ input: child.stdout });
-        let settled = false;
-        let nextId = 1;
+export function readCodexAccountPlanViaAppServer(): Effect.Effect<
+  string | undefined,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner
+> {
+  return Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const probeResultRef = yield* Ref.make<{ done: boolean; plan: string | undefined }>({
+      done: false,
+      plan: undefined,
+    });
+    const command = ChildProcess.make("codex", ["app-server"], {
+      shell: process.platform === "win32",
+      stdin: {
+        stream: Stream.make(
+          encodeJsonRpcMessage({
+            id: APP_SERVER_INITIALIZE_REQUEST_ID,
+            method: "initialize",
+            params: buildCodexInitializeParams(),
+          }),
+          encodeJsonRpcMessage({ method: "initialized" }),
+          encodeJsonRpcMessage({
+            id: APP_SERVER_ACCOUNT_READ_REQUEST_ID,
+            method: "account/read",
+            params: {},
+          }),
+        ),
+      },
+    });
 
-        const cleanup = () => {
-          signal.removeEventListener("abort", onAbort);
-          output.close();
-          child.stdin.destroy();
-          if (!child.killed) {
-            child.kill();
-          }
-        };
-
-        const fail = (error: Error) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          reject(error);
-        };
-
-        const succeed = (plan: string | undefined) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          resolve(plan);
-        };
-
-        const onAbort = () => fail(new Error("Codex app-server probe aborted."));
-
-        signal.addEventListener("abort", onAbort, { once: true });
-
-        const sendMessage = (message: unknown) => {
-          if (child.stdin.destroyed) return;
-          child.stdin.write(`${JSON.stringify(message)}\n`);
-        };
-
-        output.on("line", (line) => {
-          let parsed: unknown;
-          try {
-            parsed = JSON.parse(line);
-          } catch {
-            return;
-          }
-          if (!parsed || typeof parsed !== "object") return;
-          const record = parsed as Record<string, unknown>;
-          const id =
-            typeof record.id === "number" || typeof record.id === "string" ? record.id : null;
-          if (id === 1) {
+    yield* spawner.streamLines(command).pipe(
+      Stream.runForEachWhile((line) =>
+        Effect.gen(function* () {
+          const parsed = yield* Effect.try({
+            try: () => JSON.parse(line),
+            catch: () => null,
+          });
+          const record = asObject(parsed);
+          if (!record) return true;
+          const id = record.id;
+          if (id === APP_SERVER_INITIALIZE_REQUEST_ID) {
             if (record.error && typeof record.error === "object") {
-              fail(new Error("Codex app-server initialize failed."));
-              return;
+              return yield* Effect.fail(new Error("Codex app-server initialize failed."));
             }
-            sendMessage({ method: "initialized" });
-            sendMessage({ id: nextId, method: "account/read", params: {} });
-            nextId += 1;
-            return;
+            return true;
           }
-          if (id === 2) {
-            if (record.error && typeof record.error === "object") {
-              succeed(undefined);
-              return;
-            }
-            succeed(extractCodexAccountPlan(record));
+          if (id !== APP_SERVER_ACCOUNT_READ_REQUEST_ID) {
+            return true;
           }
-        });
+          yield* Ref.set(probeResultRef, {
+            done: true,
+            plan:
+              record.error && typeof record.error === "object"
+                ? undefined
+                : extractCodexAccountPlan(record),
+          });
+          return false;
+        }),
+      ),
+    );
 
-        child.once("error", (error) => fail(error));
-        child.once("exit", (code) => {
-          if (settled) return;
-          fail(
-            new Error(
-              `Codex app-server exited before account data was available (code ${code ?? "unknown"}).`,
-            ),
-          );
-        });
-
-        sendMessage({
-          id: nextId,
-          method: "initialize",
-          params: buildCodexInitializeParams(),
-        });
-        nextId += 1;
-      }),
-  ).pipe(
+    const probeResult = yield* Ref.get(probeResultRef);
+    if (probeResult.done) {
+      return probeResult.plan;
+    }
+    return yield* Effect.fail(
+      new Error("Codex app-server exited before account data was available."),
+    );
+  }).pipe(
+    Effect.scoped,
     Effect.timeoutOption(APP_SERVER_PROBE_TIMEOUT_MS),
     Effect.map((result) => (Option.isSome(result) ? result.value : undefined)),
     Effect.orElseSucceed(() => undefined),
