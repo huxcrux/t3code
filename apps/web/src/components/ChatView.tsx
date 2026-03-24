@@ -220,6 +220,31 @@ function providerDisplayName(provider: ProviderKind): string {
   }
 }
 
+function providerUsabilityIssue(
+  provider: ProviderKind,
+  enabled: boolean,
+  status: ServerProviderStatus | null,
+): string | null {
+  if (!enabled) {
+    return `${providerDisplayName(provider)} is disabled in Settings. Re-enable it to start a turn.`;
+  }
+  if (status && !status.available) {
+    return `${providerDisplayName(provider)} was not found. Install it or check your PATH.`;
+  }
+  if (status?.authStatus === "unauthenticated") {
+    return `${providerDisplayName(provider)} is not authenticated. Run its login command to authenticate.`;
+  }
+  return null;
+}
+
+function isProviderUsableForTurn(
+  provider: ProviderKind,
+  enabled: boolean,
+  status: ServerProviderStatus | null,
+): boolean {
+  return providerUsabilityIssue(provider, enabled, status) === null;
+}
+
 const extendReplacementRangeForTrailingSpace = (
   text: string,
   rangeEnd: number,
@@ -664,10 +689,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [modelOptionsByProvider, selectedModelForPicker, selectedProvider]);
   const searchableModelOptions = useMemo(
     () =>
-      AVAILABLE_PROVIDER_OPTIONS.filter(
-        (option) =>
-          enabledProviders[option.value] !== false &&
-          (lockedProvider === null || option.value === lockedProvider),
+      AVAILABLE_PROVIDER_OPTIONS.filter((option) =>
+        lockedProvider === null
+          ? enabledProviders[option.value] !== false
+          : option.value === lockedProvider,
       ).flatMap((option) =>
         modelOptionsByProvider[option.value].map(({ slug, name }) => ({
           provider: option.value,
@@ -1138,18 +1163,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
   );
-  /** Whether the selected provider is actually usable (enabled + installed + authed). */
-  const isSelectedProviderUsable =
-    isSelectedProviderEnabled &&
-    (activeProviderStatus?.available ?? true) &&
-    activeProviderStatus?.authStatus !== "unauthenticated";
-  const selectedProviderIssue: string | null = !isSelectedProviderEnabled
-    ? `${providerDisplayName(selectedProvider)} is disabled in Settings. Re-enable it to start a turn.`
-    : activeProviderStatus && !activeProviderStatus.available
-      ? `${providerDisplayName(selectedProvider)} was not found. Install it or check your PATH.`
-      : activeProviderStatus?.authStatus === "unauthenticated"
-        ? `${providerDisplayName(selectedProvider)} is not authenticated. Run its login command to authenticate.`
-        : null;
+  const isSelectedProviderUsable = isProviderUsableForTurn(
+    selectedProvider,
+    isSelectedProviderEnabled,
+    activeProviderStatus,
+  );
+  const selectedProviderIssue = providerUsabilityIssue(
+    selectedProvider,
+    isSelectedProviderEnabled,
+    activeProviderStatus,
+  );
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const threadTerminalRuntimeEnv = useMemo(() => {
@@ -1243,28 +1266,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
   }, [focusComposer]);
   const guardProviderEnabled = useCallback(
     (provider: ProviderKind, targetThreadId: ThreadId | null): boolean => {
-      if (!isProviderEnabled(settings, provider)) {
-        setThreadError(
-          targetThreadId,
-          `${providerDisplayName(provider)} is disabled in Settings. Re-enable it to start a turn.`,
-        );
-        scheduleComposerFocus();
-        return false;
-      }
       const status = providerStatuses.find((s) => s.provider === provider);
-      if (status && !status.available) {
-        setThreadError(
-          targetThreadId,
-          `${providerDisplayName(provider)} was not found. Install it or check your PATH.`,
-        );
-        scheduleComposerFocus();
-        return false;
-      }
-      if (status?.authStatus === "unauthenticated") {
-        setThreadError(
-          targetThreadId,
-          `${providerDisplayName(provider)} is not authenticated. Run its login command to authenticate.`,
-        );
+      const issue = providerUsabilityIssue(
+        provider,
+        isProviderEnabled(settings, provider),
+        status ?? null,
+      );
+      if (issue !== null) {
+        setThreadError(targetThreadId, issue);
         scheduleComposerFocus();
         return false;
       }

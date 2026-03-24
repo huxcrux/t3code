@@ -14,7 +14,7 @@ import type {
   ServerProviderStatus,
   ServerProviderStatusState,
 } from "@t3tools/contracts";
-import { Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Result, Stream } from "effect";
+import { Effect, FileSystem, Layer, Option, Path, Ref, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import type { ProviderKind } from "@t3tools/contracts";
@@ -636,8 +636,7 @@ export const ProviderHealthLive = Layer.effect(
       Effect.provideService(Path.Path, path),
       Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
     );
-    const statusesFiber = yield* runProviderChecks.pipe(Effect.forkScoped);
-    const initialStatuses: ReadonlyArray<ServerProviderStatus> = yield* Fiber.join(statusesFiber);
+    const initialStatuses: ReadonlyArray<ServerProviderStatus> = yield* runProviderChecks;
     const statusesRef = yield* Ref.make<ReadonlyArray<ServerProviderStatus>>(initialStatuses);
 
     const refreshAndStore = Effect.flatMap(runProviderChecks, (statuses) =>
