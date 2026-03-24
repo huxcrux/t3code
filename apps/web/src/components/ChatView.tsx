@@ -120,7 +120,7 @@ import {
 import { SidebarTrigger } from "./ui/sidebar";
 import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
-import { getProviderStartOptions, useAppSettings } from "../appSettings";
+import { getProviderStartOptions, isProviderEnabled, useAppSettings } from "../appSettings";
 import {
   getCustomModelOptionsByProvider,
   getCustomModelsByProvider,
@@ -209,6 +209,16 @@ function formatOutgoingPrompt(params: {
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
+
+function providerDisplayName(provider: ProviderKind): string {
+  switch (provider) {
+    case "claudeAgent":
+      return "Claude";
+    case "codex":
+    default:
+      return "Codex";
+  }
+}
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -610,6 +620,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
     : null;
   const selectedProvider: ProviderKind =
     lockedProvider ?? selectedProviderByThreadId ?? threadProvider ?? "codex";
+  const enabledProviders = settings.enabledProviders;
+  const isSelectedProviderEnabled = isProviderEnabled(settings, selectedProvider);
   const customModelsByProvider = useMemo(() => getCustomModelsByProvider(settings), [settings]);
   const { modelOptions: composerModelOptions, selectedModel } = useEffectiveComposerModelState({
     threadId,
@@ -653,7 +665,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const searchableModelOptions = useMemo(
     () =>
       AVAILABLE_PROVIDER_OPTIONS.filter(
-        (option) => lockedProvider === null || option.value === lockedProvider,
+        (option) =>
+          enabledProviders[option.value] !== false &&
+          (lockedProvider === null || option.value === lockedProvider),
       ).flatMap((option) =>
         modelOptionsByProvider[option.value].map(({ slug, name }) => ({
           provider: option.value,
@@ -665,7 +679,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           searchProvider: option.label.toLowerCase(),
         })),
       ),
-    [lockedProvider, modelOptionsByProvider],
+    [enabledProviders, lockedProvider, modelOptionsByProvider],
   );
   const phase = derivePhase(activeThread?.session ?? null);
   const isSendBusy = sendPhase !== "idle";
@@ -1124,6 +1138,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
   );
+  /** Whether the selected provider is actually usable (enabled + installed + authed). */
+  const isSelectedProviderUsable =
+    isSelectedProviderEnabled &&
+    (activeProviderStatus?.available ?? true) &&
+    activeProviderStatus?.authStatus !== "unauthenticated";
+  const selectedProviderIssue: string | null = !isSelectedProviderEnabled
+    ? `${providerDisplayName(selectedProvider)} is disabled in Settings. Re-enable it to start a turn.`
+    : activeProviderStatus && !activeProviderStatus.available
+      ? `${providerDisplayName(selectedProvider)} was not found. Install it or check your PATH.`
+      : activeProviderStatus?.authStatus === "unauthenticated"
+        ? `${providerDisplayName(selectedProvider)} is not authenticated. Run its login command to authenticate.`
+        : null;
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
   const threadTerminalRuntimeEnv = useMemo(() => {
@@ -1207,11 +1233,45 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const focusComposer = useCallback(() => {
     composerEditorRef.current?.focusAtEnd();
   }, []);
+  const openSettings = useCallback(() => {
+    void navigate({ to: "/settings" });
+  }, [navigate]);
   const scheduleComposerFocus = useCallback(() => {
     window.requestAnimationFrame(() => {
       focusComposer();
     });
   }, [focusComposer]);
+  const guardProviderEnabled = useCallback(
+    (provider: ProviderKind, targetThreadId: ThreadId | null): boolean => {
+      if (!isProviderEnabled(settings, provider)) {
+        setThreadError(
+          targetThreadId,
+          `${providerDisplayName(provider)} is disabled in Settings. Re-enable it to start a turn.`,
+        );
+        scheduleComposerFocus();
+        return false;
+      }
+      const status = providerStatuses.find((s) => s.provider === provider);
+      if (status && !status.available) {
+        setThreadError(
+          targetThreadId,
+          `${providerDisplayName(provider)} was not found. Install it or check your PATH.`,
+        );
+        scheduleComposerFocus();
+        return false;
+      }
+      if (status?.authStatus === "unauthenticated") {
+        setThreadError(
+          targetThreadId,
+          `${providerDisplayName(provider)} is not authenticated. Run its login command to authenticate.`,
+        );
+        scheduleComposerFocus();
+        return false;
+      }
+      return true;
+    },
+    [providerStatuses, scheduleComposerFocus, setThreadError, settings],
+  );
   const addTerminalContextToDraft = useCallback(
     (selection: TerminalContextSelection) => {
       if (!activeThread) {
@@ -2368,6 +2428,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     e?.preventDefault();
     const api = readNativeApi();
     if (!api || !activeThread || isSendBusy || isConnecting || sendInFlightRef.current) return;
+    if (!guardProviderEnabled(selectedProvider, activeThread.id)) return;
     if (activePendingProgress) {
       onAdvanceActivePendingUserInput();
       return;
@@ -2871,6 +2932,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
       ) {
         return;
       }
+      if (!guardProviderEnabled(selectedProvider, activeThread.id)) {
+        return;
+      }
 
       const trimmed = text.trim();
       if (!trimmed) {
@@ -2966,6 +3030,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       activeProposedPlan,
       beginSendPhase,
       forceStickToBottom,
+      guardProviderEnabled,
       isConnecting,
       isSendBusy,
       isServerThread,
@@ -2995,6 +3060,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
       isConnecting ||
       sendInFlightRef.current
     ) {
+      return;
+    }
+    if (!guardProviderEnabled(selectedProvider, activeThread.id)) {
       return;
     }
 
@@ -3088,6 +3156,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     activeProposedPlan,
     activeThread,
     beginSendPhase,
+    guardProviderEnabled,
     isConnecting,
     isSendBusy,
     isServerThread,
@@ -3110,6 +3179,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
         scheduleComposerFocus();
         return;
       }
+      if (!guardProviderEnabled(provider, activeThread.id)) {
+        return;
+      }
       const resolvedModel = resolveAppModelSelection(provider, customModelsByProvider, model);
       const nextModelSelection: ModelSelection = {
         provider,
@@ -3121,6 +3193,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
     },
     [
       activeThread,
+      guardProviderEnabled,
       lockedProvider,
       scheduleComposerFocus,
       setComposerDraftModelSelection,
@@ -3757,9 +3830,32 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                 ? "Ask for follow-up changes or attach images"
                                 : "Ask anything, @tag files/folders, or use / to show available commands"
                       }
-                      disabled={isConnecting || isComposerApprovalState}
+                      disabled={
+                        isConnecting || isComposerApprovalState || !isSelectedProviderUsable
+                      }
                     />
                   </div>
+                  {selectedProviderIssue ? (
+                    <div className="mx-2.5 mb-1.5 flex items-center gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 sm:mx-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs font-medium text-destructive">
+                          {selectedProviderIssue}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-destructive/70">
+                          Fix the issue in settings or switch to another provider.
+                        </p>
+                      </div>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="xs"
+                        className="shrink-0 border-destructive/30 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                        onClick={openSettings}
+                      >
+                        Open Settings
+                      </Button>
+                    </div>
+                  ) : null}
 
                   {/* Bottom toolbar */}
                   {activePendingApproval ? (
@@ -3790,12 +3886,15 @@ export default function ChatView({ threadId }: ChatViewProps) {
                             : "gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden sm:min-w-max sm:overflow-visible",
                         )}
                       >
-                        {/* Provider/model picker */}
+                        {/* Provider/model picker — keep interactive even when the
+                            active provider is disabled so the user can switch providers */}
                         <ProviderModelPicker
                           compact={isComposerFooterCompact}
                           provider={selectedProvider}
                           model={selectedModelForPickerWithCustomFallback}
                           lockedProvider={lockedProvider}
+                          enabledProviders={enabledProviders}
+                          providerStatuses={providerStatuses}
                           modelOptionsByProvider={modelOptionsByProvider}
                           {...(composerProviderState.modelPickerIconClassName
                             ? {
@@ -3945,6 +4044,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                               className="rounded-full px-4"
                               disabled={
                                 activePendingIsResponding ||
+                                !isSelectedProviderUsable ||
                                 (activePendingProgress.isLastQuestion
                                   ? !activePendingResolvedAnswers
                                   : !activePendingProgress.canAdvance)
@@ -3981,7 +4081,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                 type="submit"
                                 size="sm"
                                 className="h-9 rounded-full px-4 sm:h-8"
-                                disabled={isSendBusy || isConnecting}
+                                disabled={isSendBusy || isConnecting || !isSelectedProviderUsable}
                               >
                                 {isConnecting || isSendBusy ? "Sending..." : "Refine"}
                               </Button>
@@ -3991,7 +4091,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                   type="submit"
                                   size="sm"
                                   className="h-9 rounded-l-full rounded-r-none px-4 sm:h-8"
-                                  disabled={isSendBusy || isConnecting}
+                                  disabled={isSendBusy || isConnecting || !isSelectedProviderUsable}
                                 >
                                   {isConnecting || isSendBusy ? "Sending..." : "Implement"}
                                 </Button>
@@ -4003,7 +4103,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                         variant="default"
                                         className="h-9 rounded-l-none rounded-r-full border-l-white/12 px-2 sm:h-8"
                                         aria-label="Implementation actions"
-                                        disabled={isSendBusy || isConnecting}
+                                        disabled={
+                                          isSendBusy || isConnecting || !isSelectedProviderUsable
+                                        }
                                       />
                                     }
                                   >
@@ -4011,7 +4113,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
                                   </MenuTrigger>
                                   <MenuPopup align="end" side="top">
                                     <MenuItem
-                                      disabled={isSendBusy || isConnecting}
+                                      disabled={
+                                        isSendBusy || isConnecting || !isSelectedProviderUsable
+                                      }
                                       onClick={() => void onImplementPlanInNewThread()}
                                     >
                                       Implement in a new thread
@@ -4025,7 +4129,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
                               type="submit"
                               className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/90 text-primary-foreground transition-all duration-150 hover:bg-primary hover:scale-105 disabled:opacity-30 disabled:hover:scale-100 sm:h-8 sm:w-8"
                               disabled={
-                                isSendBusy || isConnecting || !composerSendState.hasSendableContent
+                                isSendBusy ||
+                                isConnecting ||
+                                !composerSendState.hasSendableContent ||
+                                !isSelectedProviderUsable
                               }
                               aria-label={
                                 isConnecting

@@ -1,4 +1,4 @@
-import { type ModelSlug, type ProviderKind } from "@t3tools/contracts";
+import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { resolveSelectableModel } from "@t3tools/shared/model";
 import { memo, useState } from "react";
 import type { VariantProps } from "class-variance-authority";
@@ -49,10 +49,43 @@ function providerIconClassName(
   return provider === "claudeAgent" ? "text-[#d97757]" : fallbackClassName;
 }
 
+/** Derive a short status label for a provider that isn't usable. */
+function providerIssueLabel(
+  status: ServerProviderStatus | undefined,
+  enabledBySettings: boolean,
+): string | null {
+  if (!enabledBySettings) return "Disabled";
+  if (!status) return null;
+  if (!status.available) return "Not found";
+  if (status.authStatus === "unauthenticated") return "Unauthed";
+  return null;
+}
+
+/** Whether a provider is actually usable (installed + authenticated + enabled). */
+function isProviderUsable(
+  status: ServerProviderStatus | undefined,
+  enabledBySettings: boolean,
+): boolean {
+  if (!enabledBySettings) return false;
+  if (!status) return true; // status not loaded yet — assume usable
+  if (!status.available) return false;
+  if (status.authStatus === "unauthenticated") return false;
+  return true;
+}
+
+function providerMetaLabel(
+  status: ServerProviderStatus | undefined,
+  enabledBySettings: boolean,
+): string | null {
+  return providerIssueLabel(status, enabledBySettings);
+}
+
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
+  enabledProviders: Record<ProviderKind, boolean>;
+  providerStatuses?: ReadonlyArray<ServerProviderStatus>;
   modelOptionsByProvider: Record<ProviderKind, ReadonlyArray<{ slug: string; name: string }>>;
   activeProviderIconClassName?: string;
   compact?: boolean;
@@ -63,12 +96,24 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
 }) {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const activeProvider = props.lockedProvider ?? props.provider;
+  const activeProviderStatus = props.providerStatuses?.find((s) => s.provider === activeProvider);
+  const showActiveProviderChevron =
+    props.enabledProviders[activeProvider] !== false &&
+    activeProviderStatus !== undefined &&
+    activeProviderStatus.status === "ready" &&
+    activeProviderStatus.available &&
+    activeProviderStatus.authStatus === "authenticated";
+  const isActiveProviderUsable = isProviderUsable(
+    activeProviderStatus,
+    props.enabledProviders[activeProvider] !== false,
+  );
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
     selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;
   const ProviderIcon = PROVIDER_ICON_BY_PROVIDER[activeProvider];
   const handleModelChange = (provider: ProviderKind, value: string) => {
-    if (props.disabled) return;
+    const status = props.providerStatuses?.find((s) => s.provider === provider);
+    if (!isProviderUsable(status, props.enabledProviders[provider] !== false)) return;
     if (!value) return;
     const resolvedModel = resolveSelectableModel(
       provider,
@@ -80,11 +125,15 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     setIsMenuOpen(false);
   };
 
+  // Allow opening the menu even when the active provider is unusable,
+  // so the user can switch to a working provider.
+  const canOpenMenu = !props.disabled || !isActiveProviderUsable;
+
   return (
     <Menu
       open={isMenuOpen}
       onOpenChange={(open) => {
-        if (props.disabled) {
+        if (!canOpenMenu) {
           setIsMenuOpen(false);
           return;
         }
@@ -99,9 +148,10 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             className={cn(
               "min-w-0 justify-start overflow-hidden whitespace-nowrap px-2 text-muted-foreground/70 hover:text-foreground/80 [&_svg]:mx-0",
               props.compact ? "max-w-42 shrink-0" : "max-w-48 shrink sm:max-w-56 sm:px-3",
+              !isActiveProviderUsable && "text-destructive/70 hover:text-destructive",
               props.triggerClassName,
             )}
-            disabled={props.disabled}
+            disabled={!canOpenMenu}
           />
         }
       >
@@ -115,12 +165,16 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
             aria-hidden="true"
             className={cn(
               "size-4 shrink-0",
-              providerIconClassName(activeProvider, "text-muted-foreground/70"),
-              props.activeProviderIconClassName,
+              !isActiveProviderUsable
+                ? "text-destructive/50"
+                : providerIconClassName(activeProvider, "text-muted-foreground/70"),
+              isActiveProviderUsable && props.activeProviderIconClassName,
             )}
           />
           <span className="min-w-0 flex-1 truncate">{selectedModelLabel}</span>
-          <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
+          {showActiveProviderChevron ? (
+            <ChevronDownIcon aria-hidden="true" className="size-3 shrink-0 opacity-60" />
+          ) : null}
         </span>
       </MenuTrigger>
       <MenuPopup align="start">
@@ -134,6 +188,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 <MenuRadioItem
                   key={`${props.lockedProvider}:${modelOption.slug}`}
                   value={modelOption.slug}
+                  disabled={props.enabledProviders[props.lockedProvider!] === false}
                   onClick={() => setIsMenuOpen(false)}
                 >
                   {modelOption.name}
@@ -145,6 +200,35 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
           <>
             {AVAILABLE_PROVIDER_OPTIONS.map((option) => {
               const OptionIcon = PROVIDER_ICON_BY_PROVIDER[option.value];
+              const optionStatus = props.providerStatuses?.find((s) => s.provider === option.value);
+              const optionUsable = isProviderUsable(
+                optionStatus,
+                props.enabledProviders[option.value] !== false,
+              );
+              const metaLabel = providerMetaLabel(
+                optionStatus,
+                props.enabledProviders[option.value] !== false,
+              );
+              if (!optionUsable) {
+                return (
+                  <MenuItem key={option.value} disabled>
+                    <OptionIcon
+                      aria-hidden="true"
+                      className={cn(
+                        "size-4 shrink-0",
+                        providerIconClassName(option.value, "text-muted-foreground/85"),
+                        "opacity-50",
+                      )}
+                    />
+                    <span className="flex-1">{option.label}</span>
+                    {metaLabel != null && (
+                      <span className="ms-auto text-[11px] text-muted-foreground/60 uppercase tracking-[0.08em]">
+                        {metaLabel}
+                      </span>
+                    )}
+                  </MenuItem>
+                );
+              }
               return (
                 <MenuSub key={option.value}>
                   <MenuSubTrigger>
@@ -155,7 +239,12 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                         providerIconClassName(option.value, "text-muted-foreground/85"),
                       )}
                     />
-                    {option.label}
+                    <span className="flex-1">{option.label}</span>
+                    {metaLabel != null && (
+                      <span className="ms-auto pe-1 text-[11px] text-muted-foreground/60 uppercase tracking-[0.08em]">
+                        {metaLabel}
+                      </span>
+                    )}
                   </MenuSubTrigger>
                   <MenuSubPopup className="[--available-height:min(24rem,70vh)]" sideOffset={4}>
                     <MenuGroup>

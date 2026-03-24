@@ -13,9 +13,9 @@ import {
   classifyCodexStderrLine,
   isRecoverableThreadResumeError,
   normalizeCodexModelSlug,
-  readCodexAccountSnapshot,
   resolveCodexModelForAccount,
 } from "./codexAppServerManager";
+import { readCodexAccountSnapshot } from "./provider/codexAccount";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
 
@@ -255,6 +255,7 @@ describe("readCodexAccountSnapshot", () => {
       }),
     ).toEqual({
       type: "chatgpt",
+      email: "plus@example.com",
       planType: "plus",
       sparkEnabled: false,
     });
@@ -269,6 +270,7 @@ describe("readCodexAccountSnapshot", () => {
       }),
     ).toEqual({
       type: "chatgpt",
+      email: "pro@example.com",
       planType: "pro",
       sparkEnabled: true,
     });

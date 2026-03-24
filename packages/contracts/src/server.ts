@@ -40,6 +40,7 @@ export const ServerProviderStatus = Schema.Struct({
   authStatus: ServerProviderAuthStatus,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
+  version: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;
 
@@ -69,3 +70,30 @@ export const ServerConfigUpdatedPayload = Schema.Struct({
   providers: ServerProviderStatuses,
 });
 export type ServerConfigUpdatedPayload = typeof ServerConfigUpdatedPayload.Type;
+
+export const ServerRefreshProviderStatusesResult = Schema.Struct({
+  providers: ServerProviderStatuses,
+});
+export type ServerRefreshProviderStatusesResult = typeof ServerRefreshProviderStatusesResult.Type;
+
+export const ServerRefreshProviderStatusInput = Schema.Struct({
+  provider: ProviderKind,
+});
+export type ServerRefreshProviderStatusInput = typeof ServerRefreshProviderStatusInput.Type;
+
+export const ServerRefreshProviderStatusResult = Schema.Struct({
+  providers: ServerProviderStatuses,
+});
+export type ServerRefreshProviderStatusResult = typeof ServerRefreshProviderStatusResult.Type;
+
+export const ServerProviderAuthActionInput = Schema.Struct({
+  provider: ProviderKind,
+});
+export type ServerProviderAuthActionInput = typeof ServerProviderAuthActionInput.Type;
+
+export const ServerProviderAuthActionResult = Schema.Struct({
+  success: Schema.Boolean,
+  message: Schema.optional(TrimmedNonEmptyString),
+  providers: ServerProviderStatuses,
+});
+export type ServerProviderAuthActionResult = typeof ServerProviderAuthActionResult.Type;

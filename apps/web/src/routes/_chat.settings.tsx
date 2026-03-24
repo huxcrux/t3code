@@ -1,10 +1,24 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
-import { ChevronDownIcon, PlusIcon, RotateCcwIcon, Undo2Icon, XIcon } from "lucide-react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  ChevronDownIcon,
+  EllipsisVerticalIcon,
+  LogInIcon,
+  LogOutIcon,
+  PlusIcon,
+  RefreshCwIcon,
+  RotateCcwIcon,
+  Undo2Icon,
+  XIcon,
+} from "lucide-react";
 import { type ReactNode, useCallback, useState } from "react";
-import { type ProviderKind } from "@t3tools/contracts";
+import {
+  type ProviderKind,
+  type ServerConfig,
+  type ServerProviderStatus,
+} from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { useAppSettings } from "../appSettings";
+import { isProviderEnabled, patchProviderEnabled, useAppSettings } from "../appSettings";
 import {
   getCustomModelOptionsByProvider,
   getCustomModelsForProvider,
@@ -28,12 +42,13 @@ import { SidebarTrigger } from "../components/ui/sidebar";
 import { Switch } from "../components/ui/switch";
 import { ProviderModelPicker } from "../components/chat/ProviderModelPicker";
 import { TraitsPicker } from "../components/chat/TraitsPicker";
+import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
 import { isElectron } from "../env";
 import { useTheme } from "../hooks/useTheme";
-import { serverConfigQueryOptions } from "../lib/serverReactQuery";
+import { serverConfigQueryOptions, serverQueryKeys } from "../lib/serverReactQuery";
 import { cn } from "../lib/utils";
 import { ensureNativeApi, readNativeApi } from "../nativeApi";
 
@@ -100,6 +115,35 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     ),
   },
 ];
+
+function providerStatusDotClass(status: ServerProviderStatus["status"]): string {
+  switch (status) {
+    case "ready":
+      return "bg-emerald-500";
+    case "warning":
+      return "bg-amber-500";
+    case "error":
+    default:
+      return "bg-destructive";
+  }
+}
+
+function providerStatusLabel(status: ServerProviderStatus): string {
+  if (!status.available) return "Not found";
+  if (status.authStatus === "unauthenticated") return "Unauthed";
+  if (status.status === "ready") return "Ready";
+  if (status.status === "warning") return "Warning";
+  return "Error";
+}
+
+function providerStatusSummary(status: ServerProviderStatus | undefined): string {
+  if (!status) return "Unknown";
+  if (!status.available) return "Not found";
+  if (status.authStatus === "unauthenticated") return "Not authenticated";
+  if (status.status === "ready") return "Authenticated";
+  if (status.status === "warning") return "Warning";
+  return "Error";
+}
 
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -191,9 +235,13 @@ function SettingResetButton({ label, onClick }: { label: string; onClick: () => 
 function SettingsRouteView() {
   const { theme, setTheme } = useTheme();
   const { settings, defaults, updateSettings, resetSettings } = useAppSettings();
+  const queryClient = useQueryClient();
   const serverConfigQuery = useQuery(serverConfigQueryOptions());
   const [isOpeningKeybindings, setIsOpeningKeybindings] = useState(false);
   const [openKeybindingsError, setOpenKeybindingsError] = useState<string | null>(null);
+  const [refreshProviderStatusesError, setRefreshProviderStatusesError] = useState<string | null>(
+    null,
+  );
   const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
     codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
     claudeAgent: Boolean(settings.claudeBinaryPath),
@@ -216,6 +264,42 @@ function SettingsRouteView() {
   const claudeBinaryPath = settings.claudeBinaryPath;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
+  const providerStatuses = serverConfigQuery.data?.providers ?? [];
+
+  const updateProviderStatuses = useCallback(
+    (providers: ServerConfig["providers"]) => {
+      queryClient.setQueryData<ServerConfig>(serverQueryKeys.config(), (existing) =>
+        existing ? { ...existing, providers } : existing,
+      );
+    },
+    [queryClient],
+  );
+
+  const refreshProviderStatusMutation = useMutation({
+    mutationFn: async (provider: ProviderKind) =>
+      ensureNativeApi().server.refreshProviderStatus({ provider }),
+    onMutate: () => {
+      setRefreshProviderStatusesError(null);
+    },
+    onSuccess: (result) => updateProviderStatuses(result.providers),
+    onError: (error) => {
+      setRefreshProviderStatusesError(
+        error instanceof Error ? error.message : "Unable to refresh provider statuses.",
+      );
+    },
+  });
+
+  const providerLoginMutation = useMutation({
+    mutationFn: async (provider: ProviderKind) =>
+      ensureNativeApi().server.providerLogin({ provider }),
+    onSuccess: (result) => updateProviderStatuses(result.providers),
+  });
+
+  const providerLogoutMutation = useMutation({
+    mutationFn: async (provider: ProviderKind) =>
+      ensureNativeApi().server.providerLogout({ provider }),
+    onSuccess: (result) => updateProviderStatuses(result.providers),
+  });
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings);
   const textGenProvider = textGenerationModelSelection.provider;
@@ -247,6 +331,9 @@ function SettingsRouteView() {
     settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
     settings.codexBinaryPath !== defaults.codexBinaryPath ||
     settings.codexHomePath !== defaults.codexHomePath;
+  const areProviderEnablementSettingsDirty = (
+    Object.entries(settings.enabledProviders) as Array<[ProviderKind, boolean]>
+  ).some(([provider, enabled]) => enabled !== defaults.enabledProviders[provider]);
   const changedSettingLabels = [
     ...(theme !== "system" ? ["Theme"] : []),
     ...(settings.timestampFormat !== defaults.timestampFormat ? ["Time format"] : []),
@@ -265,6 +352,7 @@ function SettingsRouteView() {
     ...(settings.customCodexModels.length > 0 || settings.customClaudeModels.length > 0
       ? ["Custom models"]
       : []),
+    ...(areProviderEnablementSettingsDirty ? ["Enabled providers"] : []),
     ...(isInstallSettingsDirty ? ["Provider installs"] : []),
   ];
 
@@ -652,6 +740,7 @@ function SettingsRouteView() {
                       provider={textGenProvider}
                       model={textGenModel}
                       lockedProvider={null}
+                      enabledProviders={settings.enabledProviders}
                       modelOptionsByProvider={gitModelOptionsByProvider}
                       triggerVariant="outline"
                       triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
@@ -819,6 +908,173 @@ function SettingsRouteView() {
                   ) : null}
                 </div>
               </SettingsRow>
+            </SettingsSection>
+
+            <SettingsSection title="Providers">
+              <div className="divide-y divide-border">
+                {MODEL_PROVIDER_SETTINGS.map((providerSettings) => {
+                  const providerStatus = providerStatuses.find(
+                    (status) => status.provider === providerSettings.provider,
+                  );
+                  const enabled = isProviderEnabled(settings, providerSettings.provider);
+                  const isDisabled = !enabled;
+
+                  const isAuthenticated = providerStatus?.authStatus === "authenticated";
+                  const isAvailable = providerStatus?.available === true;
+                  const isAuthActionPending =
+                    (providerLoginMutation.isPending &&
+                      providerLoginMutation.variables === providerSettings.provider) ||
+                    (providerLogoutMutation.isPending &&
+                      providerLogoutMutation.variables === providerSettings.provider);
+                  const isRefreshPending =
+                    refreshProviderStatusMutation.isPending &&
+                    refreshProviderStatusMutation.variables === providerSettings.provider;
+                  return (
+                    <div
+                      key={providerSettings.provider}
+                      className={cn(
+                        "flex items-start gap-3 px-4 py-3 sm:px-5",
+                        isDisabled && "bg-warning/6",
+                      )}
+                    >
+                      {/* Status dot */}
+                      <span
+                        className={cn(
+                          "size-2 shrink-0 self-center rounded-full",
+                          isDisabled
+                            ? "bg-warning"
+                            : providerStatus
+                              ? providerStatusDotClass(providerStatus.status)
+                              : "bg-muted-foreground/40",
+                        )}
+                        title={
+                          isDisabled
+                            ? "Disabled"
+                            : providerStatus
+                              ? providerStatusLabel(providerStatus)
+                              : "Unknown"
+                        }
+                      />
+
+                      {/* Provider info */}
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-baseline gap-2">
+                          <span
+                            className={cn(
+                              "text-sm font-medium text-foreground",
+                              isDisabled && "text-warning-foreground",
+                            )}
+                          >
+                            {providerSettings.title}
+                          </span>
+                          {providerStatus?.version ? (
+                            <span
+                              className={cn(
+                                "text-[11px] text-muted-foreground",
+                                isDisabled && "text-warning-foreground/75",
+                              )}
+                            >
+                              v{providerStatus.version}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p
+                          className={cn(
+                            "text-xs text-muted-foreground",
+                            isDisabled && "text-warning-foreground/85",
+                          )}
+                        >
+                          {isDisabled ? "Disabled" : providerStatusSummary(providerStatus)}
+                          {providerStatus?.message && providerStatus.status !== "ready" ? (
+                            <> &mdash; {providerStatus.message}</>
+                          ) : null}
+                        </p>
+                      </div>
+
+                      <div className="flex shrink-0 items-center self-center">
+                        {/* Enable/disable toggle */}
+                        <div className="flex w-10 justify-center">
+                          <Switch
+                            checked={enabled}
+                            onCheckedChange={(checked) =>
+                              updateSettings(
+                                patchProviderEnabled(
+                                  settings,
+                                  providerSettings.provider,
+                                  Boolean(checked),
+                                ),
+                              )
+                            }
+                            aria-label={`${providerSettings.title} enabled`}
+                          />
+                        </div>
+
+                        {/* Actions menu */}
+                        <div className="flex w-10 justify-center">
+                          <Menu>
+                            <MenuTrigger
+                              render={
+                                <Button
+                                  size="icon-xs"
+                                  variant="ghost"
+                                  className="text-muted-foreground"
+                                  aria-label={`${providerSettings.title} actions`}
+                                />
+                              }
+                            >
+                              <EllipsisVerticalIcon className="size-3.5" />
+                            </MenuTrigger>
+                            <MenuPopup align="end">
+                              <MenuItem
+                                disabled={isRefreshPending}
+                                onClick={() =>
+                                  refreshProviderStatusMutation.mutate(providerSettings.provider)
+                                }
+                              >
+                                <RefreshCwIcon className="mr-2 size-3.5" />
+                                {isRefreshPending ? "Refreshing..." : "Refresh"}
+                              </MenuItem>
+                              {isAvailable && !isAuthenticated ? (
+                                <MenuItem
+                                  disabled={isAuthActionPending}
+                                  onClick={() =>
+                                    providerLoginMutation.mutate(providerSettings.provider)
+                                  }
+                                >
+                                  <LogInIcon className="mr-2 size-3.5" />
+                                  {isAuthActionPending ? "Logging in..." : "Log in"}
+                                </MenuItem>
+                              ) : null}
+                              {isAvailable && isAuthenticated ? (
+                                <MenuItem
+                                  disabled={isAuthActionPending}
+                                  onClick={() =>
+                                    providerLogoutMutation.mutate(providerSettings.provider)
+                                  }
+                                >
+                                  <LogOutIcon className="mr-2 size-3.5" />
+                                  {isAuthActionPending ? "Logging out..." : "Log out"}
+                                </MenuItem>
+                              ) : null}
+                              {!isAvailable ? <MenuItem disabled>CLI not detected</MenuItem> : null}
+                            </MenuPopup>
+                          </Menu>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {refreshProviderStatusesError ? (
+                  <div className="flex items-center justify-end gap-2 px-4 py-2.5 sm:px-5">
+                    {refreshProviderStatusesError ? (
+                      <p className="mr-auto text-xs text-destructive">
+                        {refreshProviderStatusesError}
+                      </p>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
             </SettingsSection>
 
             <SettingsSection title="Advanced">

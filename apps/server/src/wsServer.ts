@@ -269,7 +269,6 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
   );
 
   const providerStatuses = yield* providerHealth.getStatuses;
-
   const clients = yield* Ref.make(new Set<WebSocket>());
   const logger = createLogger("ws");
   const readiness = yield* makeServerReadiness;
@@ -710,7 +709,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
     Effect.all([closeAllClients, closeWebSocketServer.pipe(Effect.ignoreCause({ log: true }))]),
   );
 
-  const routeRequest = Effect.fnUntraced(function* (ws: WebSocket, request: WebSocketRequest) {
+  const routeRequest = Effect.fnUntraced(function* (request: WebSocketRequest) {
     switch (request.body._tag) {
       case ORCHESTRATION_WS_METHODS.getSnapshot:
         return yield* projectionReadModelQuery.getSnapshot();
@@ -799,13 +798,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
       case WS_METHODS.gitRunStackedAction: {
         const body = stripRequestTag(request.body);
-        return yield* gitManager.runStackedAction(body, {
-          actionId: body.actionId,
-          progressReporter: {
-            publish: (event) =>
-              pushBus.publishClient(ws, WS_CHANNELS.gitActionProgress, event).pipe(Effect.asVoid),
-          },
-        });
+        return yield* gitManager.runStackedAction(body);
       }
 
       case WS_METHODS.gitResolvePullRequest: {
@@ -889,6 +882,27 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
           availableEditors,
         };
 
+      case WS_METHODS.serverRefreshProviderStatuses: {
+        const providers = yield* providerHealth.refreshStatuses;
+        return { providers };
+      }
+
+      case WS_METHODS.serverRefreshProviderStatus: {
+        const body = stripRequestTag(request.body);
+        const providers = yield* providerHealth.refreshStatus(body.provider);
+        return { providers };
+      }
+
+      case WS_METHODS.serverProviderLogin: {
+        const body = stripRequestTag(request.body);
+        return yield* providerHealth.login(body.provider);
+      }
+
+      case WS_METHODS.serverProviderLogout: {
+        const body = stripRequestTag(request.body);
+        return yield* providerHealth.logout(body.provider);
+      }
+
       case WS_METHODS.serverUpsertKeybinding: {
         const body = stripRequestTag(request.body);
         const keybindingsConfig = yield* keybindingsManager.upsertKeybindingRule(body);
@@ -927,7 +941,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       });
     }
 
-    const result = yield* Effect.exit(routeRequest(ws, request.success));
+    const result = yield* Effect.exit(routeRequest(request.success));
     if (Exit.isFailure(result)) {
       return yield* sendWsResponse({
         id: request.success.id,

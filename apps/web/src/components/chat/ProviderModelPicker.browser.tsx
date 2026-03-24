@@ -17,6 +17,11 @@ const MODEL_OPTIONS_BY_PROVIDER = {
   ],
 } as const satisfies Record<ProviderKind, ReadonlyArray<{ slug: ModelSlug; name: string }>>;
 
+const ENABLED_PROVIDERS = {
+  codex: true,
+  claudeAgent: true,
+} as const satisfies Record<ProviderKind, boolean>;
+
 async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
@@ -31,6 +36,7 @@ async function mountPicker(props: {
       provider={props.provider}
       model={props.model}
       lockedProvider={props.lockedProvider}
+      enabledProviders={ENABLED_PROVIDERS}
       modelOptionsByProvider={MODEL_OPTIONS_BY_PROVIDER}
       triggerVariant={props.triggerVariant}
       onProviderModelChange={onProviderModelChange}

@@ -6,7 +6,10 @@ import {
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
+  getEnabledProviderOptions,
   getProviderStartOptions,
+  isProviderEnabled,
+  patchProviderEnabled,
 } from "./appSettings";
 import {
   getAppModelOptions,
@@ -239,6 +242,56 @@ describe("provider-indexed custom model settings", () => {
     expect(
       modelOptionsByProvider.claudeAgent.some((option) => option.slug === "claude-sonnet-4-6"),
     ).toBe(true);
+  });
+});
+
+describe("provider enablement", () => {
+  it("defaults providers to enabled when decoding older persisted settings", () => {
+    const decode = Schema.decodeSync(Schema.fromJsonString(AppSettingsSchema));
+
+    expect(
+      decode(
+        JSON.stringify({
+          codexBinaryPath: "/usr/local/bin/codex",
+        }),
+      ).enabledProviders,
+    ).toEqual({
+      codex: true,
+      claudeAgent: true,
+    });
+  });
+
+  it("reads enabled providers", () => {
+    const settings = {
+      enabledProviders: {
+        codex: true,
+        claudeAgent: false,
+      },
+    } as const;
+
+    expect(isProviderEnabled(settings, "codex")).toBe(true);
+    expect(isProviderEnabled(settings, "claudeAgent")).toBe(false);
+    expect(getEnabledProviderOptions(settings)).toEqual(["codex"]);
+  });
+
+  it("patches provider enabled state without resetting other providers", () => {
+    expect(
+      patchProviderEnabled(
+        {
+          enabledProviders: {
+            codex: true,
+            claudeAgent: true,
+          },
+        },
+        "claudeAgent",
+        false,
+      ),
+    ).toEqual({
+      enabledProviders: {
+        codex: true,
+        claudeAgent: false,
+      },
+    });
   });
 });
 

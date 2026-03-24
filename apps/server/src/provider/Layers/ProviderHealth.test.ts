@@ -609,7 +609,8 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
 
     it("JSON with loggedIn=true is authenticated", () => {
       const parsed = parseClaudeAuthStatusFromOutput({
-        stdout: '{"loggedIn":true,"authMethod":"claude.ai"}\n',
+        stdout:
+          '{"loggedIn":true,"authMethod":"claude.ai","email":"claude@example.com","subscriptionType":"pro"}\n',
         stderr: "",
         code: 0,
       });

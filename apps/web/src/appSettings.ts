@@ -3,6 +3,7 @@ import { Option, Schema } from "effect";
 import {
   DEFAULT_GIT_TEXT_GENERATION_MODEL_BY_PROVIDER,
   ModelSelection,
+  type ProviderKind,
   type ProviderStartOptions,
 } from "@t3tools/contracts";
 import { useLocalStorage } from "./hooks/useLocalStorage";
@@ -20,6 +21,9 @@ export const DEFAULT_SIDEBAR_PROJECT_SORT_ORDER: SidebarProjectSortOrder = "upda
 export const SidebarThreadSortOrder = Schema.Literals(["updated_at", "created_at"]);
 export type SidebarThreadSortOrder = typeof SidebarThreadSortOrder.Type;
 export const DEFAULT_SIDEBAR_THREAD_SORT_ORDER: SidebarThreadSortOrder = "updated_at";
+type EnabledProvidersSettings = {
+  [provider in ProviderKind]: boolean;
+};
 
 const withDefaults =
   <
@@ -36,6 +40,10 @@ const withDefaults =
 
 export const AppSettingsSchema = Schema.Struct({
   claudeBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
+  enabledProviders: Schema.Struct({
+    codex: Schema.Boolean,
+    claudeAgent: Schema.Boolean,
+  }).pipe(withDefaults(() => ({ codex: true, claudeAgent: true }))),
   codexBinaryPath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(withDefaults(() => "")),
   defaultThreadEnvMode: EnvMode.pipe(withDefaults(() => "local" as const satisfies EnvMode)),
@@ -61,6 +69,34 @@ export const AppSettingsSchema = Schema.Struct({
 export type AppSettings = typeof AppSettingsSchema.Type;
 
 const DEFAULT_APP_SETTINGS = AppSettingsSchema.makeUnsafe({});
+
+export function isProviderEnabled(
+  settings: Pick<AppSettings, "enabledProviders">,
+  provider: ProviderKind,
+): boolean {
+  return settings.enabledProviders[provider] ?? true;
+}
+
+export function getEnabledProviderOptions(
+  settings: Pick<AppSettings, "enabledProviders">,
+): ProviderKind[] {
+  return (Object.entries(settings.enabledProviders) as Array<[ProviderKind, boolean]>)
+    .filter(([, enabled]) => enabled)
+    .map(([provider]) => provider);
+}
+
+export function patchProviderEnabled(
+  settings: Pick<AppSettings, "enabledProviders">,
+  provider: ProviderKind,
+  enabled: boolean,
+): { enabledProviders: EnabledProvidersSettings } {
+  return {
+    enabledProviders: {
+      ...settings.enabledProviders,
+      [provider]: enabled,
+    },
+  };
+}
 
 function normalizeAppSettings(settings: AppSettings): AppSettings {
   return {

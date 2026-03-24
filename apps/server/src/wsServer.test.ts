@@ -76,6 +76,10 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
+  refreshStatuses: Effect.succeed(defaultProviderStatuses),
+  refreshStatus: () => Effect.succeed(defaultProviderStatuses),
+  login: () => Effect.succeed({ success: true, providers: defaultProviderStatuses }),
+  logout: () => Effect.succeed({ success: true, providers: defaultProviderStatuses }),
 };
 
 class MockTerminalManager implements TerminalManagerShape {
@@ -1123,6 +1127,88 @@ describe("WebSocket Server", () => {
     );
   });
 
+  it("refreshes provider statuses on demand", async () => {
+    const refreshedProviders: ReadonlyArray<ServerProviderStatus> = [
+      {
+        provider: "codex",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-01-02T00:00:00.000Z",
+        message: "Could not verify Codex authentication status.",
+      },
+    ];
+
+    server = await createTestServer({
+      cwd: "/my/workspace",
+      providerHealth: {
+        getStatuses: Effect.succeed(defaultProviderStatuses),
+        refreshStatuses: Effect.succeed(refreshedProviders),
+        refreshStatus: () => Effect.succeed(refreshedProviders),
+        login: () => Effect.succeed({ success: true, providers: refreshedProviders }),
+        logout: () => Effect.succeed({ success: true, providers: refreshedProviders }),
+      },
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.serverRefreshProviderStatuses);
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      providers: refreshedProviders,
+    });
+  });
+
+  it("refreshes a single provider status on demand", async () => {
+    const refreshedProviders: ReadonlyArray<ServerProviderStatus> = [
+      {
+        provider: "codex",
+        status: "warning",
+        available: true,
+        authStatus: "unknown",
+        checkedAt: "2026-01-02T00:00:00.000Z",
+        message: "Could not verify Codex authentication status.",
+      },
+      {
+        provider: "claudeAgent",
+        status: "ready",
+        available: true,
+        authStatus: "authenticated",
+        checkedAt: "2026-01-01T00:00:00.000Z",
+      },
+    ];
+
+    server = await createTestServer({
+      cwd: "/my/workspace",
+      providerHealth: {
+        getStatuses: Effect.succeed(defaultProviderStatuses),
+        refreshStatuses: Effect.succeed(defaultProviderStatuses),
+        refreshStatus: (provider) => {
+          expect(provider).toBe("codex");
+          return Effect.succeed(refreshedProviders);
+        },
+        login: () => Effect.succeed({ success: true, providers: refreshedProviders }),
+        logout: () => Effect.succeed({ success: true, providers: refreshedProviders }),
+      },
+    });
+    const addr = server.address();
+    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
+
+    const [ws] = await connectAndAwaitWelcome(port);
+    connections.push(ws);
+
+    const response = await sendRequest(ws, WS_METHODS.serverRefreshProviderStatus, {
+      provider: "codex",
+    });
+    expect(response.error).toBeUndefined();
+    expect(response.result).toEqual({
+      providers: refreshedProviders,
+    });
+  });
+
   it("returns error for unknown methods", async () => {
     server = await createTestServer({ cwd: "/test" });
     const addr = server.address();
@@ -1835,7 +1921,6 @@ describe("WebSocket Server", () => {
     connections.push(ws);
 
     const response = await sendRequest(ws, WS_METHODS.gitRunStackedAction, {
-      actionId: "client-action-1",
       cwd: "/test",
       action: "commit_push",
       modelSelection: {
@@ -1845,96 +1930,14 @@ describe("WebSocket Server", () => {
     });
     expect(response.result).toBeUndefined();
     expect(response.error?.message).toContain("detached HEAD");
-    expect(runStackedAction).toHaveBeenCalledWith(
-      {
-        actionId: "client-action-1",
-        cwd: "/test",
-        action: "commit_push",
-        modelSelection: {
-          provider: "codex",
-          model: "gpt-5.4-mini",
-        },
-      },
-      expect.objectContaining({
-        actionId: "client-action-1",
-        progressReporter: expect.any(Object),
-      }),
-    );
-  });
-
-  it("publishes git action progress only to the initiating websocket", async () => {
-    const runStackedAction = vi.fn(
-      (_input, options) =>
-        options?.progressReporter
-          ?.publish({
-            actionId: options.actionId ?? "action-1",
-            cwd: "/test",
-            action: "commit",
-            kind: "phase_started",
-            phase: "commit",
-            label: "Committing...",
-          })
-          .pipe(
-            Effect.flatMap(() =>
-              Effect.succeed({
-                action: "commit" as const,
-                branch: { status: "skipped_not_requested" as const },
-                commit: {
-                  status: "created" as const,
-                  commitSha: "abc1234",
-                  subject: "Test commit",
-                },
-                push: { status: "skipped_not_requested" as const },
-                pr: { status: "skipped_not_requested" as const },
-              }),
-            ),
-          ) ?? Effect.void,
-    );
-    const gitManager: GitManagerShape = {
-      status: vi.fn(() => Effect.void as any),
-      resolvePullRequest: vi.fn(() => Effect.void as any),
-      preparePullRequestThread: vi.fn(() => Effect.void as any),
-      runStackedAction,
-    };
-
-    server = await createTestServer({ cwd: "/test", gitManager });
-    const addr = server.address();
-    const port = typeof addr === "object" && addr !== null ? addr.port : 0;
-
-    const [initiatingWs] = await connectAndAwaitWelcome(port);
-    const [otherWs] = await connectAndAwaitWelcome(port);
-    connections.push(initiatingWs, otherWs);
-
-    const responsePromise = sendRequest(initiatingWs, WS_METHODS.gitRunStackedAction, {
-      actionId: "client-action-2",
+    expect(runStackedAction).toHaveBeenCalledWith({
       cwd: "/test",
-      action: "commit",
+      action: "commit_push",
       modelSelection: {
         provider: "codex",
         model: "gpt-5.4-mini",
       },
     });
-    const progressPush = await waitForPush(initiatingWs, WS_CHANNELS.gitActionProgress);
-
-    expect(progressPush.data).toEqual({
-      actionId: "client-action-2",
-      cwd: "/test",
-      action: "commit",
-      kind: "phase_started",
-      phase: "commit",
-      label: "Committing...",
-    });
-
-    await expect(
-      waitForPush(otherWs, WS_CHANNELS.gitActionProgress, undefined, 10, 100),
-    ).rejects.toThrow("Timed out waiting for WebSocket message after 100ms");
-    await expect(responsePromise).resolves.toEqual(
-      expect.objectContaining({
-        result: expect.objectContaining({
-          action: "commit",
-        }),
-      }),
-    );
   });
 
   it("rejects websocket connections without a valid auth token", async () => {

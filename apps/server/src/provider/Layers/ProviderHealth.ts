@@ -14,19 +14,27 @@ import type {
   ServerProviderStatus,
   ServerProviderStatusState,
 } from "@t3tools/contracts";
-import { Array, Effect, Fiber, FileSystem, Layer, Option, Path, Result, Stream } from "effect";
+import { Array, Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+
+import type { ProviderKind } from "@t3tools/contracts";
 
 import {
   formatCodexCliUpgradeMessage,
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "../codexCliVersion";
-import { ProviderHealth, type ProviderHealthShape } from "../Services/ProviderHealth";
+import {
+  ProviderHealth,
+  type ProviderAuthActionResult,
+  type ProviderHealthShape,
+} from "../Services/ProviderHealth";
 
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
+
+const CLI_VERSION_PATTERN = /\bv?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)\b/;
 
 // ── Pure helpers ────────────────────────────────────────────────────
 
@@ -82,6 +90,16 @@ function extractAuthBoolean(value: unknown): boolean | undefined {
     if (nested !== undefined) return nested;
   }
   return undefined;
+}
+
+function parseJsonOutput(result: CommandResult): unknown {
+  const trimmed = result.stdout.trim();
+  if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) return undefined;
+  try {
+    return JSON.parse(trimmed);
+  } catch {
+    return undefined;
+  }
 }
 
 export function parseAuthStatusFromOutput(result: CommandResult): {
@@ -345,6 +363,7 @@ export const checkCodexProviderStatus: Effect.Effect<
       authStatus: "unknown" as const,
       checkedAt,
       message: formatCodexCliUpgradeMessage(parsedVersion),
+      ...(parsedVersion ? { version: parsedVersion } : {}),
     };
   }
 
@@ -362,6 +381,7 @@ export const checkCodexProviderStatus: Effect.Effect<
       authStatus: "unknown" as const,
       checkedAt,
       message: "Using a custom Codex model provider; OpenAI login check skipped.",
+      ...(parsedVersion ? { version: parsedVersion } : {}),
     } satisfies ServerProviderStatus;
   }
 
@@ -404,6 +424,7 @@ export const checkCodexProviderStatus: Effect.Effect<
     authStatus: parsed.authStatus,
     checkedAt,
     ...(parsed.message ? { message: parsed.message } : {}),
+    ...(parsedVersion ? { version: parsedVersion } : {}),
   } satisfies ServerProviderStatus;
 });
 
@@ -444,20 +465,11 @@ export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
   }
 
   // `claude auth status` returns JSON with a `loggedIn` boolean.
-  const parsedAuth = (() => {
-    const trimmed = result.stdout.trim();
-    if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
-    }
-    try {
-      return {
-        attemptedJsonParse: true as const,
-        auth: extractAuthBoolean(JSON.parse(trimmed)),
-      };
-    } catch {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
-    }
-  })();
+  const parsedJson = parseJsonOutput(result);
+  const parsedAuth = {
+    attemptedJsonParse: parsedJson !== undefined,
+    auth: extractAuthBoolean(parsedJson),
+  };
 
   if (parsedAuth.auth === true) {
     return { status: "ready", authStatus: "authenticated" };
@@ -544,6 +556,9 @@ export const checkClaudeProviderStatus: Effect.Effect<
     };
   }
 
+  const claudeVersionMatch = CLI_VERSION_PATTERN.exec(`${version.stdout}\n${version.stderr}`);
+  const claudeVersion = claudeVersionMatch?.[1] ?? undefined;
+
   // Probe 2: `claude auth status` — is the user authenticated?
   const authProbe = yield* runClaudeCommand(["auth", "status"]).pipe(
     Effect.timeoutOption(DEFAULT_TIMEOUT_MS),
@@ -562,6 +577,7 @@ export const checkClaudeProviderStatus: Effect.Effect<
         error instanceof Error
           ? `Could not verify Claude authentication status: ${error.message}.`
           : "Could not verify Claude authentication status.",
+      ...(claudeVersion ? { version: claudeVersion } : {}),
     };
   }
 
@@ -573,6 +589,7 @@ export const checkClaudeProviderStatus: Effect.Effect<
       authStatus: "unknown" as const,
       checkedAt,
       message: "Could not verify Claude authentication status. Timed out while running command.",
+      ...(claudeVersion ? { version: claudeVersion } : {}),
     };
   }
 
@@ -584,20 +601,145 @@ export const checkClaudeProviderStatus: Effect.Effect<
     authStatus: parsed.authStatus,
     checkedAt,
     ...(parsed.message ? { message: parsed.message } : {}),
+    ...(claudeVersion ? { version: claudeVersion } : {}),
   } satisfies ServerProviderStatus;
 });
+
+// ── Auth action helpers ──────────────────────────────────────────────
+
+const LOGIN_TIMEOUT_MS = 30_000;
+const LOGOUT_TIMEOUT_MS = 10_000;
+
+function loginArgs(provider: ProviderKind): {
+  run: (args: ReadonlyArray<string>) => ReturnType<typeof runCodexCommand>;
+  args: ReadonlyArray<string>;
+} {
+  switch (provider) {
+    case "codex":
+      return { run: runCodexCommand, args: ["login"] };
+    case "claudeAgent":
+      return { run: runClaudeCommand, args: ["auth", "login"] };
+  }
+}
+
+function logoutArgs(provider: ProviderKind): {
+  run: (args: ReadonlyArray<string>) => ReturnType<typeof runCodexCommand>;
+  args: ReadonlyArray<string>;
+} {
+  switch (provider) {
+    case "codex":
+      return { run: runCodexCommand, args: ["logout"] };
+    case "claudeAgent":
+      return { run: runClaudeCommand, args: ["auth", "logout"] };
+  }
+}
+
+function providerCheck(
+  provider: ProviderKind,
+): Effect.Effect<
+  ServerProviderStatus,
+  never,
+  ChildProcessSpawner.ChildProcessSpawner | FileSystem.FileSystem | Path.Path
+> {
+  switch (provider) {
+    case CODEX_PROVIDER:
+      return checkCodexProviderStatus;
+    case CLAUDE_AGENT_PROVIDER:
+      return checkClaudeProviderStatus;
+  }
+}
 
 // ── Layer ───────────────────────────────────────────────────────────
 
 export const ProviderHealthLive = Layer.effect(
   ProviderHealth,
   Effect.gen(function* () {
-    const statusesFiber = yield* Effect.all([checkCodexProviderStatus, checkClaudeProviderStatus], {
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const runProviderChecks = Effect.all([checkCodexProviderStatus, checkClaudeProviderStatus], {
       concurrency: "unbounded",
-    }).pipe(Effect.forkScoped);
+    }).pipe(
+      Effect.provideService(FileSystem.FileSystem, fileSystem),
+      Effect.provideService(Path.Path, path),
+      Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+    );
+    const statusesFiber = yield* runProviderChecks.pipe(Effect.forkScoped);
+    const initialStatuses: ReadonlyArray<ServerProviderStatus> = yield* Fiber.join(statusesFiber);
+    const statusesRef = yield* Ref.make<ReadonlyArray<ServerProviderStatus>>(initialStatuses);
+
+    const refreshAndStore = Effect.flatMap(runProviderChecks, (statuses) =>
+      Ref.set(statusesRef, statuses).pipe(Effect.as(statuses)),
+    );
+    const refreshStatusAndStore = (provider: ProviderKind) =>
+      Effect.gen(function* () {
+        const nextStatus = yield* providerCheck(provider).pipe(
+          Effect.provideService(FileSystem.FileSystem, fileSystem),
+          Effect.provideService(Path.Path, path),
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+        );
+        const currentStatuses = yield* Ref.get(statusesRef);
+        const providers = currentStatuses.map((status) =>
+          status.provider === provider ? nextStatus : status,
+        );
+        yield* Ref.set(statusesRef, providers);
+        return providers;
+      });
+
+    const runAuthAction = (
+      provider: ProviderKind,
+      getConfig: (p: ProviderKind) => ReturnType<typeof loginArgs>,
+      timeoutMs: number,
+    ): Effect.Effect<ProviderAuthActionResult> =>
+      Effect.gen(function* () {
+        const { run, args } = getConfig(provider);
+        const result = yield* run(args).pipe(
+          Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
+          Effect.timeoutOption(timeoutMs),
+          Effect.result,
+        );
+
+        if (Result.isFailure(result)) {
+          const error = result.failure;
+          const providers = yield* refreshAndStore;
+          return {
+            success: false,
+            message: error instanceof Error ? error.message : "Command failed.",
+            providers,
+          };
+        }
+
+        if (Option.isNone(result.success)) {
+          const providers = yield* refreshAndStore;
+          return {
+            success: false,
+            message: "Command timed out.",
+            providers,
+          };
+        }
+
+        const cmd = result.success.value;
+        const providers = yield* refreshAndStore;
+        return {
+          success: cmd.code === 0,
+          ...(cmd.code !== 0
+            ? {
+                message:
+                  nonEmptyTrimmed(cmd.stderr) ??
+                  nonEmptyTrimmed(cmd.stdout) ??
+                  `Command exited with code ${cmd.code}.`,
+              }
+            : {}),
+          providers,
+        };
+      });
 
     return {
-      getStatuses: Fiber.join(statusesFiber),
+      getStatuses: Ref.get(statusesRef),
+      refreshStatuses: refreshAndStore,
+      refreshStatus: refreshStatusAndStore,
+      login: (provider: ProviderKind) => runAuthAction(provider, loginArgs, LOGIN_TIMEOUT_MS),
+      logout: (provider: ProviderKind) => runAuthAction(provider, logoutArgs, LOGOUT_TIMEOUT_MS),
     } satisfies ProviderHealthShape;
   }),
 );

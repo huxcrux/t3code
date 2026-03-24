@@ -73,6 +73,22 @@ it.effect("accepts git.preparePullRequestThread requests", () =>
   }),
 );
 
+it.effect("accepts server.refreshProviderStatus requests", () =>
+  Effect.gen(function* () {
+    const parsed = yield* decodeWebSocketRequest({
+      id: "req-provider-refresh-1",
+      body: {
+        _tag: WS_METHODS.serverRefreshProviderStatus,
+        provider: "codex",
+      },
+    });
+    assert.strictEqual(parsed.body._tag, WS_METHODS.serverRefreshProviderStatus);
+    if (parsed.body._tag === WS_METHODS.serverRefreshProviderStatus) {
+      assert.strictEqual(parsed.body.provider, "codex");
+    }
+  }),
+);
+
 it.effect("accepts typed websocket push envelopes with sequence", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeWsResponse({
@@ -95,19 +111,15 @@ it.effect("accepts typed websocket push envelopes with sequence", () =>
   }),
 );
 
-it.effect("accepts git.actionProgress push envelopes", () =>
+it.effect("accepts server.configUpdated push envelopes", () =>
   Effect.gen(function* () {
     const parsed = yield* decodeWsResponse({
       type: "push",
       sequence: 3,
-      channel: WS_CHANNELS.gitActionProgress,
+      channel: WS_CHANNELS.serverConfigUpdated,
       data: {
-        actionId: "action-1",
-        cwd: "/repo",
-        action: "commit",
-        kind: "phase_started",
-        phase: "commit",
-        label: "Committing...",
+        issues: [],
+        providers: [],
       },
     });
 
@@ -115,7 +127,7 @@ it.effect("accepts git.actionProgress push envelopes", () =>
       assert.fail("expected websocket response to decode as a push envelope");
     }
 
-    assert.strictEqual(parsed.channel, WS_CHANNELS.gitActionProgress);
+    assert.strictEqual(parsed.channel, WS_CHANNELS.serverConfigUpdated);
   }),
 );
 

@@ -1,6 +1,5 @@
 import type {
   GitCheckoutInput,
-  GitActionProgressEvent,
   GitCreateBranchInput,
   GitPreparePullRequestThreadInput,
   GitPreparePullRequestThreadResult,
@@ -25,7 +24,14 @@ import type {
   ProjectWriteFileInput,
   ProjectWriteFileResult,
 } from "./project";
-import type { ServerConfig } from "./server";
+import type {
+  ServerConfig,
+  ServerProviderAuthActionInput,
+  ServerProviderAuthActionResult,
+  ServerRefreshProviderStatusInput,
+  ServerRefreshProviderStatusResult,
+  ServerRefreshProviderStatusesResult,
+} from "./server";
 import type {
   TerminalClearInput,
   TerminalCloseInput,
@@ -150,7 +156,6 @@ export interface NativeApi {
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     status: (input: GitStatusInput) => Promise<GitStatusResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
-    onActionProgress: (callback: (event: GitActionProgressEvent) => void) => () => void;
   };
   contextMenu: {
     show: <T extends string>(
@@ -160,6 +165,16 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
+    refreshProviderStatuses: () => Promise<ServerRefreshProviderStatusesResult>;
+    refreshProviderStatus: (
+      input: ServerRefreshProviderStatusInput,
+    ) => Promise<ServerRefreshProviderStatusResult>;
+    providerLogin: (
+      input: ServerProviderAuthActionInput,
+    ) => Promise<ServerProviderAuthActionResult>;
+    providerLogout: (
+      input: ServerProviderAuthActionInput,
+    ) => Promise<ServerProviderAuthActionResult>;
     upsertKeybinding: (input: ServerUpsertKeybindingInput) => Promise<ServerUpsertKeybindingResult>;
   };
   orchestration: {
