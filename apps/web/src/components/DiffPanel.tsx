@@ -5,7 +5,6 @@ import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { ThreadId, type TurnId } from "@t3tools/contracts";
 import {
   ChevronDownIcon,
-  ChevronUpIcon,
   ChevronLeftIcon,
   ChevronRightIcon,
   Columns2Icon,
@@ -685,7 +684,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
                             }}
                           >
                             {isCollapsed ? (
-                              <ChevronUpIcon className="size-3.5" />
+                              <ChevronRightIcon className="size-3.5" />
                             ) : (
                               <ChevronDownIcon className="size-3.5" />
                             )}
