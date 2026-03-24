@@ -90,12 +90,6 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const activeProvider = props.lockedProvider ?? props.provider;
   const activeProviderStatus = props.providerStatuses?.find((s) => s.provider === activeProvider);
-  const showActiveProviderChevron =
-    props.enabledProviders[activeProvider] !== false &&
-    activeProviderStatus !== undefined &&
-    activeProviderStatus.status === "ready" &&
-    activeProviderStatus.available &&
-    activeProviderStatus.authStatus === "authenticated";
   const lockedProviderStatus =
     props.lockedProvider === null
       ? undefined
@@ -104,6 +98,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
     activeProviderStatus,
     props.enabledProviders[activeProvider] !== false,
   );
+  const showActiveProviderChevron = isActiveProviderUsable && !props.disabled;
   const selectedProviderOptions = props.modelOptionsByProvider[activeProvider];
   const selectedModelLabel =
     selectedProviderOptions.find((option) => option.slug === props.model)?.name ?? props.model;

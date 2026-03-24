@@ -1077,11 +1077,9 @@ function SettingsRouteView() {
 
                 {refreshProviderStatusesError ? (
                   <div className="flex items-center justify-end gap-2 px-4 py-2.5 sm:px-5">
-                    {refreshProviderStatusesError ? (
-                      <p className="mr-auto text-xs text-destructive">
-                        {refreshProviderStatusesError}
-                      </p>
-                    ) : null}
+                    <p className="mr-auto text-xs text-destructive">
+                      {refreshProviderStatusesError}
+                    </p>
                   </div>
                 ) : null}
               </div>

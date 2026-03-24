@@ -132,10 +132,13 @@ export function readCodexAccountPlanViaAppServer(): Effect.Effect<
     yield* spawner.streamLines(command).pipe(
       Stream.runForEachWhile((line) =>
         Effect.gen(function* () {
-          const parsed = yield* Effect.try({
-            try: () => JSON.parse(line),
-            catch: () => null,
-          });
+          const parsed = (() => {
+            try {
+              return JSON.parse(line);
+            } catch {
+              return null;
+            }
+          })();
           const record = asObject(parsed);
           if (!record) return true;
           const id = record.id;
