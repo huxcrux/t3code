@@ -182,6 +182,7 @@ import {
   SendPhase,
 } from "./ChatView.logic";
 import { useLocalStorage } from "~/hooks/useLocalStorage";
+import { getProviderUsabilityIssue, isProviderUsable } from "~/lib/providerUsability";
 
 const ATTACHMENT_PREVIEW_HANDOFF_TTL_MS = 5000;
 const IMAGE_SIZE_LIMIT_LABEL = `${Math.round(PROVIDER_SEND_TURN_MAX_IMAGE_BYTES / (1024 * 1024))}MB`;
@@ -209,41 +210,6 @@ function formatOutgoingPrompt(params: {
 const COMPOSER_PATH_QUERY_DEBOUNCE_MS = 120;
 const SCRIPT_TERMINAL_COLS = 120;
 const SCRIPT_TERMINAL_ROWS = 30;
-
-function providerDisplayName(provider: ProviderKind): string {
-  switch (provider) {
-    case "claudeAgent":
-      return "Claude";
-    case "codex":
-    default:
-      return "Codex";
-  }
-}
-
-function providerUsabilityIssue(
-  provider: ProviderKind,
-  enabled: boolean,
-  status: ServerProviderStatus | null,
-): string | null {
-  if (!enabled) {
-    return `${providerDisplayName(provider)} is disabled in Settings. Re-enable it to start a turn.`;
-  }
-  if (status && !status.available) {
-    return `${providerDisplayName(provider)} was not found. Install it or check your PATH.`;
-  }
-  if (status?.authStatus === "unauthenticated") {
-    return `${providerDisplayName(provider)} is not authenticated. Run its login command to authenticate.`;
-  }
-  return null;
-}
-
-function isProviderUsableForTurn(
-  provider: ProviderKind,
-  enabled: boolean,
-  status: ServerProviderStatus | null,
-): boolean {
-  return providerUsabilityIssue(provider, enabled, status) === null;
-}
 
 const extendReplacementRangeForTrailingSpace = (
   text: string,
@@ -1163,15 +1129,14 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => providerStatuses.find((status) => status.provider === selectedProvider) ?? null,
     [selectedProvider, providerStatuses],
   );
-  const isSelectedProviderUsable = isProviderUsableForTurn(
-    selectedProvider,
-    isSelectedProviderEnabled,
+  const isSelectedProviderUsable = isProviderUsable(
     activeProviderStatus,
+    isSelectedProviderEnabled,
   );
-  const selectedProviderIssue = providerUsabilityIssue(
+  const selectedProviderIssue = getProviderUsabilityIssue(
     selectedProvider,
-    isSelectedProviderEnabled,
     activeProviderStatus,
+    isSelectedProviderEnabled,
   );
   const activeProjectCwd = activeProject?.cwd ?? null;
   const activeThreadWorktreePath = activeThread?.worktreePath ?? null;
@@ -1267,10 +1232,10 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const guardProviderEnabled = useCallback(
     (provider: ProviderKind, targetThreadId: ThreadId | null): boolean => {
       const status = providerStatuses.find((s) => s.provider === provider);
-      const issue = providerUsabilityIssue(
+      const issue = getProviderUsabilityIssue(
         provider,
-        isProviderEnabled(settings, provider),
         status ?? null,
+        isProviderEnabled(settings, provider),
       );
       if (issue !== null) {
         setThreadError(targetThreadId, issue);

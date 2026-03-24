@@ -19,6 +19,7 @@ import {
   MenuTrigger,
 } from "../ui/menu";
 import { ClaudeAI, CursorIcon, Gemini, Icon, OpenAI, OpenCodeIcon } from "../Icons";
+import { getProviderIssueLabel, isProviderUsable } from "~/lib/providerUsability";
 import { cn } from "~/lib/utils";
 
 function isAvailableProviderOption(option: (typeof PROVIDER_OPTIONS)[number]): option is {
@@ -47,30 +48,6 @@ function providerIconClassName(
   fallbackClassName: string,
 ): string {
   return provider === "claudeAgent" ? "text-[#d97757]" : fallbackClassName;
-}
-
-/** Derive a short status label for a provider that isn't usable. */
-function providerIssueLabel(
-  status: ServerProviderStatus | undefined,
-  enabledBySettings: boolean,
-): string | null {
-  if (!enabledBySettings) return "Disabled";
-  if (!status) return null;
-  if (!status.available) return "Not found";
-  if (status.authStatus === "unauthenticated") return "Unauthed";
-  return null;
-}
-
-/** Whether a provider is actually usable (installed + authenticated + enabled). */
-function isProviderUsable(
-  status: ServerProviderStatus | undefined,
-  enabledBySettings: boolean,
-): boolean {
-  if (!enabledBySettings) return false;
-  if (!status) return true; // status not loaded yet — assume usable
-  if (!status.available) return false;
-  if (status.authStatus === "unauthenticated") return false;
-  return true;
 }
 
 export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
@@ -204,7 +181,7 @@ export const ProviderModelPicker = memo(function ProviderModelPicker(props: {
                 optionStatus,
                 props.enabledProviders[option.value] !== false,
               );
-              const metaLabel = providerIssueLabel(
+              const metaLabel = getProviderIssueLabel(
                 optionStatus,
                 props.enabledProviders[option.value] !== false,
               );

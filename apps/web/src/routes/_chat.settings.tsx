@@ -292,13 +292,39 @@ function SettingsRouteView() {
   const providerLoginMutation = useMutation({
     mutationFn: async (provider: ProviderKind) =>
       ensureNativeApi().server.providerLogin({ provider }),
-    onSuccess: (result) => updateProviderStatuses(result.providers),
+    onMutate: () => {
+      setRefreshProviderStatusesError(null);
+    },
+    onSuccess: (result) => {
+      updateProviderStatuses(result.providers);
+      if (!result.success) {
+        setRefreshProviderStatusesError(result.message ?? "Unable to log in provider.");
+      }
+    },
+    onError: (error) => {
+      setRefreshProviderStatusesError(
+        error instanceof Error ? error.message : "Unable to log in provider.",
+      );
+    },
   });
 
   const providerLogoutMutation = useMutation({
     mutationFn: async (provider: ProviderKind) =>
       ensureNativeApi().server.providerLogout({ provider }),
-    onSuccess: (result) => updateProviderStatuses(result.providers),
+    onMutate: () => {
+      setRefreshProviderStatusesError(null);
+    },
+    onSuccess: (result) => {
+      updateProviderStatuses(result.providers);
+      if (!result.success) {
+        setRefreshProviderStatusesError(result.message ?? "Unable to log out provider.");
+      }
+    },
+    onError: (error) => {
+      setRefreshProviderStatusesError(
+        error instanceof Error ? error.message : "Unable to log out provider.",
+      );
+    },
   });
 
   const textGenerationModelSelection = resolveAppModelSelectionState(settings);
