@@ -176,6 +176,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   const patchViewportRef = useRef<HTMLDivElement>(null);
   const turnStripRef = useRef<HTMLDivElement>(null);
   const previousDiffOpenRef = useRef(false);
+  const pendingSelectedFileScrollRef = useRef(false);
   const [canScrollTurnStripLeft, setCanScrollTurnStripLeft] = useState(false);
   const [canScrollTurnStripRight, setCanScrollTurnStripRight] = useState(false);
   const routeThreadId = useParams({
@@ -318,6 +319,10 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
   }, [selectedPatch]);
 
   useEffect(() => {
+    pendingSelectedFileScrollRef.current = Boolean(selectedFilePath);
+  }, [renderableFiles, selectedFilePath]);
+
+  useEffect(() => {
     if (!selectedFilePath) {
       return;
     }
@@ -329,6 +334,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
 
   useEffect(() => {
     if (!selectedFilePath || !patchViewportRef.current) {
+      pendingSelectedFileScrollRef.current = false;
       return;
     }
 
@@ -336,6 +342,7 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       (fileDiff) => resolveFileDiffPath(fileDiff) === selectedFilePath,
     );
     if (!selectedFile) {
+      pendingSelectedFileScrollRef.current = false;
       return;
     }
 
@@ -343,10 +350,19 @@ export default function DiffPanel({ mode = "inline" }: DiffPanelProps) {
       return;
     }
 
+    if (!pendingSelectedFileScrollRef.current) {
+      return;
+    }
+
     const target = Array.from(
       patchViewportRef.current.querySelectorAll<HTMLElement>("[data-diff-file-path]"),
     ).find((element) => element.dataset.diffFilePath === selectedFilePath);
-    target?.scrollIntoView({ block: "nearest" });
+    if (!target) {
+      return;
+    }
+
+    target.scrollIntoView({ block: "nearest" });
+    pendingSelectedFileScrollRef.current = false;
   }, [collapsedFileKeys, renderableFiles, selectedFilePath]);
 
   const openDiffFileInEditor = useCallback(
