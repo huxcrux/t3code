@@ -1,3 +1,5 @@
+import { Exit, Schema } from "effect";
+
 export function nonEmptyTrimmed(value: string | undefined): string | undefined {
   if (!value) return undefined;
   const trimmed = value.trim();
@@ -53,14 +55,16 @@ export interface CommandJsonOutput {
   readonly stdout: string;
 }
 
+const decodeUnknownJsonString = Schema.decodeUnknownExit(Schema.fromJsonString(Schema.Unknown));
+
 export function parseJsonOutput(result: CommandJsonOutput): unknown {
   const trimmed = result.stdout.trim();
   if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) return undefined;
-  try {
-    return JSON.parse(trimmed);
-  } catch {
+  const decoded = decodeUnknownJsonString(trimmed);
+  if (Exit.isFailure(decoded)) {
     return undefined;
   }
+  return decoded.value;
 }
 
 export function readAuthProbeDetails(result: CommandJsonOutput): {
@@ -68,10 +72,13 @@ export function readAuthProbeDetails(result: CommandJsonOutput): {
   readonly auth: boolean | undefined;
   readonly plan?: string;
 } {
+  const trimmed = result.stdout.trim();
+  const attemptedJsonParse =
+    trimmed.length > 0 && (trimmed.startsWith("{") || trimmed.startsWith("["));
   const parsedJson = parseJsonOutput(result);
   const plan = extractPlanLabel(parsedJson);
   return {
-    attemptedJsonParse: parsedJson !== undefined,
+    attemptedJsonParse,
     auth: extractAuthBoolean(parsedJson),
     ...(plan ? { plan } : {}),
   };
