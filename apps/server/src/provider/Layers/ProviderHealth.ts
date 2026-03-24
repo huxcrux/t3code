@@ -24,6 +24,7 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "../codexCliVersion";
+import { readCodexAccountPlanViaAppServer } from "../codexAccount";
 import {
   ProviderHealth,
   type ProviderAuthActionResult,
@@ -92,6 +93,29 @@ function extractAuthBoolean(value: unknown): boolean | undefined {
   return undefined;
 }
 
+function extractPlanLabel(value: unknown): string | undefined {
+  if (Array.isArray(value)) {
+    for (const entry of value) {
+      const nested = extractPlanLabel(entry);
+      if (nested !== undefined) return nested;
+    }
+    return undefined;
+  }
+
+  if (!value || typeof value !== "object") return undefined;
+
+  const record = value as Record<string, unknown>;
+  for (const key of ["planType", "subscriptionType", "plan", "subscription"] as const) {
+    const candidate = nonEmptyTrimmed(typeof record[key] === "string" ? record[key] : undefined);
+    if (candidate !== undefined) return candidate;
+  }
+  for (const key of ["auth", "status", "session", "account"] as const) {
+    const nested = extractPlanLabel(record[key]);
+    if (nested !== undefined) return nested;
+  }
+  return undefined;
+}
+
 function parseJsonOutput(result: CommandResult): unknown {
   const trimmed = result.stdout.trim();
   if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) return undefined;
@@ -102,10 +126,25 @@ function parseJsonOutput(result: CommandResult): unknown {
   }
 }
 
+function readAuthProbeDetails(result: CommandResult): {
+  readonly attemptedJsonParse: boolean;
+  readonly auth: boolean | undefined;
+  readonly plan?: string;
+} {
+  const parsedJson = parseJsonOutput(result);
+  const plan = extractPlanLabel(parsedJson);
+  return {
+    attemptedJsonParse: parsedJson !== undefined,
+    auth: extractAuthBoolean(parsedJson),
+    ...(plan ? { plan } : {}),
+  };
+}
+
 export function parseAuthStatusFromOutput(result: CommandResult): {
   readonly status: ServerProviderStatusState;
   readonly authStatus: ServerProviderAuthStatus;
   readonly message?: string;
+  readonly plan?: string;
 } {
   const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
 
@@ -135,23 +174,14 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     };
   }
 
-  const parsedAuth = (() => {
-    const trimmed = result.stdout.trim();
-    if (!trimmed || (!trimmed.startsWith("{") && !trimmed.startsWith("["))) {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
-    }
-    try {
-      return {
-        attemptedJsonParse: true as const,
-        auth: extractAuthBoolean(JSON.parse(trimmed)),
-      };
-    } catch {
-      return { attemptedJsonParse: false as const, auth: undefined as boolean | undefined };
-    }
-  })();
+  const parsedAuth = readAuthProbeDetails(result);
 
   if (parsedAuth.auth === true) {
-    return { status: "ready", authStatus: "authenticated" };
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+      ...(parsedAuth.plan ? { plan: parsedAuth.plan } : {}),
+    };
   }
   if (parsedAuth.auth === false) {
     return {
@@ -169,7 +199,11 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     };
   }
   if (result.code === 0) {
-    return { status: "ready", authStatus: "authenticated" };
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+      ...(parsedAuth.plan ? { plan: parsedAuth.plan } : {}),
+    };
   }
 
   const detail = detailFromResult(result);
@@ -417,6 +451,9 @@ export const checkCodexProviderStatus: Effect.Effect<
   }
 
   const parsed = parseAuthStatusFromOutput(authProbe.success.value);
+  const codexPlan =
+    parsed.plan ??
+    (parsed.authStatus === "authenticated" ? yield* readCodexAccountPlanViaAppServer() : undefined);
   return {
     provider: CODEX_PROVIDER,
     status: parsed.status,
@@ -424,6 +461,7 @@ export const checkCodexProviderStatus: Effect.Effect<
     authStatus: parsed.authStatus,
     checkedAt,
     ...(parsed.message ? { message: parsed.message } : {}),
+    ...(codexPlan ? { plan: codexPlan } : {}),
     ...(parsedVersion ? { version: parsedVersion } : {}),
   } satisfies ServerProviderStatus;
 });
@@ -434,6 +472,7 @@ export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
   readonly status: ServerProviderStatusState;
   readonly authStatus: ServerProviderAuthStatus;
   readonly message?: string;
+  readonly plan?: string;
 } {
   const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
 
@@ -465,14 +504,14 @@ export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
   }
 
   // `claude auth status` returns JSON with a `loggedIn` boolean.
-  const parsedJson = parseJsonOutput(result);
-  const parsedAuth = {
-    attemptedJsonParse: parsedJson !== undefined,
-    auth: extractAuthBoolean(parsedJson),
-  };
+  const parsedAuth = readAuthProbeDetails(result);
 
   if (parsedAuth.auth === true) {
-    return { status: "ready", authStatus: "authenticated" };
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+      ...(parsedAuth.plan ? { plan: parsedAuth.plan } : {}),
+    };
   }
   if (parsedAuth.auth === false) {
     return {
@@ -490,7 +529,11 @@ export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
     };
   }
   if (result.code === 0) {
-    return { status: "ready", authStatus: "authenticated" };
+    return {
+      status: "ready",
+      authStatus: "authenticated",
+      ...(parsedAuth.plan ? { plan: parsedAuth.plan } : {}),
+    };
   }
 
   const detail = detailFromResult(result);
@@ -601,6 +644,7 @@ export const checkClaudeProviderStatus: Effect.Effect<
     authStatus: parsed.authStatus,
     checkedAt,
     ...(parsed.message ? { message: parsed.message } : {}),
+    ...(parsed.plan ? { plan: parsed.plan } : {}),
     ...(claudeVersion ? { version: claudeVersion } : {}),
   } satisfies ServerProviderStatus;
 });

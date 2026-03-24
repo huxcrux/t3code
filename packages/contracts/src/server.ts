@@ -40,6 +40,7 @@ export const ServerProviderStatus = Schema.Struct({
   authStatus: ServerProviderAuthStatus,
   checkedAt: IsoDateTime,
   message: Schema.optional(TrimmedNonEmptyString),
+  plan: Schema.optional(TrimmedNonEmptyString),
   version: Schema.optional(TrimmedNonEmptyString),
 });
 export type ServerProviderStatus = typeof ServerProviderStatus.Type;

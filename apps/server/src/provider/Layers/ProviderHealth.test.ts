@@ -12,6 +12,7 @@ import {
   parseClaudeAuthStatusFromOutput,
   readCodexConfigModelProvider,
 } from "./ProviderHealth";
+import { extractCodexAccountPlan } from "../codexAccount";
 
 // ── Test helpers ────────────────────────────────────────────────────
 
@@ -112,12 +113,19 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "authenticated");
+        assert.strictEqual(status.plan, "pro");
       }).pipe(
         Effect.provide(
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
             if (joined === "--version") return { stdout: "codex 1.0.0\n", stderr: "", code: 0 };
-            if (joined === "login status") return { stdout: "Logged in\n", stderr: "", code: 0 };
+            if (joined === "login status") {
+              return {
+                stdout: '{"authenticated":true,"account":{"planType":"pro"}}\n',
+                stderr: "",
+                code: 0,
+              };
+            }
             throw new Error(`Unexpected args: ${joined}`);
           }),
         ),
@@ -332,6 +340,17 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(parsed.authStatus, "unauthenticated");
     });
 
+    it("extracts planType from JSON output", () => {
+      const parsed = parseAuthStatusFromOutput({
+        stdout: '{"authenticated":true,"account":{"planType":"team"}}\n',
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.strictEqual(parsed.plan, "team");
+    });
+
     it("JSON without auth marker is warning", () => {
       const parsed = parseAuthStatusFromOutput({
         stdout: '[{"ok":true}]\n',
@@ -340,6 +359,22 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       });
       assert.strictEqual(parsed.status, "warning");
       assert.strictEqual(parsed.authStatus, "unknown");
+    });
+  });
+
+  describe("extractCodexAccountPlan", () => {
+    it("extracts planType from account/read responses", () => {
+      assert.strictEqual(
+        extractCodexAccountPlan({
+          result: {
+            account: {
+              type: "chatgpt",
+              planType: "pro",
+            },
+          },
+        }),
+        "pro",
+      );
     });
   });
 
@@ -616,6 +651,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       });
       assert.strictEqual(parsed.status, "ready");
       assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.strictEqual(parsed.plan, "pro");
     });
 
     it("JSON with loggedIn=false is unauthenticated", () => {

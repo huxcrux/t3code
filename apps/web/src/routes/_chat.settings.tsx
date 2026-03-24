@@ -967,6 +967,16 @@ function SettingsRouteView() {
                           >
                             {providerSettings.title}
                           </span>
+                          {providerStatus?.plan ? (
+                            <span
+                              className={cn(
+                                "rounded-full border border-border/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground",
+                                isDisabled && "border-warning/40 text-warning-foreground/80",
+                              )}
+                            >
+                              {providerStatus.plan}
+                            </span>
+                          ) : null}
                           {providerStatus?.version ? (
                             <span
                               className={cn(
