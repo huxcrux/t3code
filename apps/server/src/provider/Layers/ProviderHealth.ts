@@ -36,6 +36,18 @@ import {
 const DEFAULT_TIMEOUT_MS = 4_000;
 const CODEX_PROVIDER = "codex" as const;
 const CLAUDE_AGENT_PROVIDER = "claudeAgent" as const;
+const CODEX_CLI_PROBE_MESSAGES = {
+  missing: "Codex CLI (`codex`) is not installed or not on PATH.",
+  versionExecutionFailed: "Failed to execute Codex CLI health check",
+  installedButFailed: "Codex CLI is installed but failed to run.",
+  authUnknownPrefix: "Could not verify Codex authentication status",
+} as const satisfies CliProbeMessages;
+const CLAUDE_CLI_PROBE_MESSAGES = {
+  missing: "Claude Agent CLI (`claude`) is not installed or not on PATH.",
+  versionExecutionFailed: "Failed to execute Claude Agent CLI health check",
+  installedButFailed: "Claude Agent CLI is installed but failed to run.",
+  authUnknownPrefix: "Could not verify Claude authentication status",
+} as const satisfies CliProbeMessages;
 
 const CLI_VERSION_PATTERN = /\bv?(\d+\.\d+(?:\.\d+)?(?:-[0-9A-Za-z.-]+)?)\b/;
 
@@ -72,7 +84,18 @@ function detailFromResult(
   return undefined;
 }
 
-export function parseAuthStatusFromOutput(result: CommandResult): {
+interface AuthStatusParserMessages {
+  readonly unsupportedCommand: string;
+  readonly unauthenticated: string;
+  readonly missingAuthMarker: string;
+  readonly unknownStatusPrefix: string;
+  readonly unauthenticatedHints: ReadonlyArray<string>;
+}
+
+function parseCliAuthStatusFromOutput(
+  result: CommandResult,
+  messages: AuthStatusParserMessages,
+): {
   readonly status: ServerProviderStatusState;
   readonly authStatus: ServerProviderAuthStatus;
   readonly message?: string;
@@ -88,21 +111,15 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "warning",
       authStatus: "unknown",
-      message: "Codex CLI authentication status command is unavailable in this Codex version.",
+      message: messages.unsupportedCommand,
     };
   }
 
-  if (
-    lowerOutput.includes("not logged in") ||
-    lowerOutput.includes("login required") ||
-    lowerOutput.includes("authentication required") ||
-    lowerOutput.includes("run `codex login`") ||
-    lowerOutput.includes("run codex login")
-  ) {
+  if (messages.unauthenticatedHints.some((hint) => lowerOutput.includes(hint))) {
     return {
       status: "error",
       authStatus: "unauthenticated",
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: messages.unauthenticated,
     };
   }
 
@@ -119,15 +136,14 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     return {
       status: "error",
       authStatus: "unauthenticated",
-      message: "Codex CLI is not authenticated. Run `codex login` and try again.",
+      message: messages.unauthenticated,
     };
   }
   if (parsedAuth.attemptedJsonParse) {
     return {
       status: "warning",
       authStatus: "unknown",
-      message:
-        "Could not verify Codex authentication status from JSON output (missing auth marker).",
+      message: messages.missingAuthMarker,
     };
   }
   if (result.code === 0) {
@@ -143,9 +159,129 @@ export function parseAuthStatusFromOutput(result: CommandResult): {
     status: "warning",
     authStatus: "unknown",
     message: detail
-      ? `Could not verify Codex authentication status. ${detail}`
-      : "Could not verify Codex authentication status.",
+      ? `${messages.unknownStatusPrefix}. ${detail}`
+      : `${messages.unknownStatusPrefix}.`,
   };
+}
+
+interface CliProbeMessages {
+  readonly missing: string;
+  readonly versionExecutionFailed: string;
+  readonly installedButFailed: string;
+  readonly authUnknownPrefix: string;
+}
+
+function buildVersionProbeFailureStatus(input: {
+  readonly provider: ProviderKind;
+  readonly checkedAt: string;
+  readonly error: unknown;
+  readonly messages: CliProbeMessages;
+}): ServerProviderStatus {
+  return {
+    provider: input.provider,
+    status: "error",
+    available: false,
+    authStatus: "unknown",
+    checkedAt: input.checkedAt,
+    message: isCommandMissingCause(input.error)
+      ? input.messages.missing
+      : `${input.messages.versionExecutionFailed}: ${input.error instanceof Error ? input.error.message : String(input.error)}.`,
+  };
+}
+
+function buildVersionProbeTimeoutStatus(input: {
+  readonly provider: ProviderKind;
+  readonly checkedAt: string;
+  readonly messages: CliProbeMessages;
+}): ServerProviderStatus {
+  return {
+    provider: input.provider,
+    status: "error",
+    available: false,
+    authStatus: "unknown",
+    checkedAt: input.checkedAt,
+    message: `${input.messages.installedButFailed} Timed out while running command.`,
+  };
+}
+
+function buildVersionProbeExitStatus(input: {
+  readonly provider: ProviderKind;
+  readonly checkedAt: string;
+  readonly result: CommandResult;
+  readonly messages: CliProbeMessages;
+}): ServerProviderStatus {
+  const detail = detailFromResult(input.result);
+  return {
+    provider: input.provider,
+    status: "error",
+    available: false,
+    authStatus: "unknown",
+    checkedAt: input.checkedAt,
+    message: detail
+      ? `${input.messages.installedButFailed} ${detail}`
+      : input.messages.installedButFailed,
+  };
+}
+
+function buildAuthProbeFailureStatus(input: {
+  readonly provider: ProviderKind;
+  readonly checkedAt: string;
+  readonly error: unknown;
+  readonly messages: CliProbeMessages;
+  readonly version?: string;
+}): ServerProviderStatus {
+  return {
+    provider: input.provider,
+    status: "warning",
+    available: true,
+    authStatus: "unknown",
+    checkedAt: input.checkedAt,
+    message:
+      input.error instanceof Error
+        ? `${input.messages.authUnknownPrefix}: ${input.error.message}.`
+        : `${input.messages.authUnknownPrefix}.`,
+    ...(input.version ? { version: input.version } : {}),
+  };
+}
+
+function buildAuthProbeTimeoutStatus(input: {
+  readonly provider: ProviderKind;
+  readonly checkedAt: string;
+  readonly messages: CliProbeMessages;
+  readonly version?: string;
+}): ServerProviderStatus {
+  return {
+    provider: input.provider,
+    status: "warning",
+    available: true,
+    authStatus: "unknown",
+    checkedAt: input.checkedAt,
+    message: `${input.messages.authUnknownPrefix}. Timed out while running command.`,
+    ...(input.version ? { version: input.version } : {}),
+  };
+}
+
+export function parseAuthStatusFromOutput(result: CommandResult): {
+  readonly status: ServerProviderStatusState;
+  readonly authStatus: ServerProviderAuthStatus;
+  readonly message?: string;
+  readonly plan?: string;
+} {
+  return parseCliAuthStatusFromOutput(result, {
+    unsupportedCommand:
+      "Codex CLI authentication status command is unavailable in this Codex version.",
+    unauthenticated: "Codex CLI is not authenticated. Run `codex login` and try again.",
+    missingAuthMarker:
+      "Could not verify Codex authentication status from JSON output (missing auth marker).",
+    unknownStatusPrefix: "Could not verify Codex authentication status",
+    unauthenticatedHints: [
+      "not logged in",
+      "login required",
+      "authentication required",
+      "run `codex login`",
+      "run codex login",
+    ],
+  });
 }
 
 // ── Codex CLI config detection ──────────────────────────────────────
@@ -294,43 +430,30 @@ export const makeCheckCodexProviderStatus = (
     );
 
     if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
-      return {
+      return buildVersionProbeFailureStatus({
         provider: CODEX_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
         checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Codex CLI (`codex`) is not installed or not on PATH."
-          : `Failed to execute Codex CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      };
+        error: versionProbe.failure,
+        messages: CODEX_CLI_PROBE_MESSAGES,
+      });
     }
 
     if (Option.isNone(versionProbe.success)) {
-      return {
+      return buildVersionProbeTimeoutStatus({
         provider: CODEX_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
         checkedAt,
-        message: "Codex CLI is installed but failed to run. Timed out while running command.",
-      };
+        messages: CODEX_CLI_PROBE_MESSAGES,
+      });
     }
 
     const version = versionProbe.success.value;
     if (version.code !== 0) {
-      const detail = detailFromResult(version);
-      return {
+      return buildVersionProbeExitStatus({
         provider: CODEX_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
         checkedAt,
-        message: detail
-          ? `Codex CLI is installed but failed to run. ${detail}`
-          : "Codex CLI is installed but failed to run.",
-      };
+        result: version,
+        messages: CODEX_CLI_PROBE_MESSAGES,
+      });
     }
 
     const parsedVersion = parseCodexCliVersion(`${version.stdout}\n${version.stderr}`);
@@ -370,31 +493,22 @@ export const makeCheckCodexProviderStatus = (
     );
 
     if (Result.isFailure(authProbe)) {
-      const error = authProbe.failure;
-      return {
+      return buildAuthProbeFailureStatus({
         provider: CODEX_PROVIDER,
-        status: "warning" as const,
-        available: true,
-        authStatus: "unknown" as const,
         checkedAt,
-        message:
-          error instanceof Error
-            ? `Could not verify Codex authentication status: ${error.message}.`
-            : "Could not verify Codex authentication status.",
+        error: authProbe.failure,
+        messages: CODEX_CLI_PROBE_MESSAGES,
         ...(parsedVersion ? { version: parsedVersion } : {}),
-      };
+      });
     }
 
     if (Option.isNone(authProbe.success)) {
-      return {
+      return buildAuthProbeTimeoutStatus({
         provider: CODEX_PROVIDER,
-        status: "warning" as const,
-        available: true,
-        authStatus: "unknown" as const,
         checkedAt,
-        message: "Could not verify Codex authentication status. Timed out while running command.",
+        messages: CODEX_CLI_PROBE_MESSAGES,
         ...(parsedVersion ? { version: parsedVersion } : {}),
-      };
+      });
     }
 
     const parsed = parseAuthStatusFromOutput(authProbe.success.value);
@@ -425,76 +539,21 @@ export function parseClaudeAuthStatusFromOutput(result: CommandResult): {
   readonly message?: string;
   readonly plan?: string;
 } {
-  const lowerOutput = `${result.stdout}\n${result.stderr}`.toLowerCase();
-
-  if (
-    lowerOutput.includes("unknown command") ||
-    lowerOutput.includes("unrecognized command") ||
-    lowerOutput.includes("unexpected argument")
-  ) {
-    return {
-      status: "warning",
-      authStatus: "unknown",
-      message:
-        "Claude Agent authentication status command is unavailable in this version of Claude.",
-    };
-  }
-
-  if (
-    lowerOutput.includes("not logged in") ||
-    lowerOutput.includes("login required") ||
-    lowerOutput.includes("authentication required") ||
-    lowerOutput.includes("run `claude login`") ||
-    lowerOutput.includes("run claude login")
-  ) {
-    return {
-      status: "error",
-      authStatus: "unauthenticated",
-      message: "Claude is not authenticated. Run `claude auth login` and try again.",
-    };
-  }
-
-  // `claude auth status` returns JSON with a `loggedIn` boolean.
-  const parsedAuth = readAuthProbeDetails(result);
-
-  if (parsedAuth.auth === true) {
-    return {
-      status: "ready",
-      authStatus: "authenticated",
-      ...(parsedAuth.plan ? { plan: parsedAuth.plan } : {}),
-    };
-  }
-  if (parsedAuth.auth === false) {
-    return {
-      status: "error",
-      authStatus: "unauthenticated",
-      message: "Claude is not authenticated. Run `claude auth login` and try again.",
-    };
-  }
-  if (parsedAuth.attemptedJsonParse) {
-    return {
-      status: "warning",
-      authStatus: "unknown",
-      message:
-        "Could not verify Claude authentication status from JSON output (missing auth marker).",
-    };
-  }
-  if (result.code === 0) {
-    return {
-      status: "ready",
-      authStatus: "authenticated",
-      ...(parsedAuth.plan ? { plan: parsedAuth.plan } : {}),
-    };
-  }
-
-  const detail = detailFromResult(result);
-  return {
-    status: "warning",
-    authStatus: "unknown",
-    message: detail
-      ? `Could not verify Claude authentication status. ${detail}`
-      : "Could not verify Claude authentication status.",
-  };
+  return parseCliAuthStatusFromOutput(result, {
+    unsupportedCommand:
+      "Claude Agent authentication status command is unavailable in this version of Claude.",
+    unauthenticated: "Claude is not authenticated. Run `claude auth login` and try again.",
+    missingAuthMarker:
+      "Could not verify Claude authentication status from JSON output (missing auth marker).",
+    unknownStatusPrefix: "Could not verify Claude authentication status",
+    unauthenticatedHints: [
+      "not logged in",
+      "login required",
+      "authentication required",
+      "run `claude login`",
+      "run claude login",
+    ],
+  });
 }
 
 export const makeCheckClaudeProviderStatus = (
@@ -510,44 +569,30 @@ export const makeCheckClaudeProviderStatus = (
     );
 
     if (Result.isFailure(versionProbe)) {
-      const error = versionProbe.failure;
-      return {
+      return buildVersionProbeFailureStatus({
         provider: CLAUDE_AGENT_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
         checkedAt,
-        message: isCommandMissingCause(error)
-          ? "Claude Agent CLI (`claude`) is not installed or not on PATH."
-          : `Failed to execute Claude Agent CLI health check: ${error instanceof Error ? error.message : String(error)}.`,
-      };
+        error: versionProbe.failure,
+        messages: CLAUDE_CLI_PROBE_MESSAGES,
+      });
     }
 
     if (Option.isNone(versionProbe.success)) {
-      return {
+      return buildVersionProbeTimeoutStatus({
         provider: CLAUDE_AGENT_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
         checkedAt,
-        message:
-          "Claude Agent CLI is installed but failed to run. Timed out while running command.",
-      };
+        messages: CLAUDE_CLI_PROBE_MESSAGES,
+      });
     }
 
     const version = versionProbe.success.value;
     if (version.code !== 0) {
-      const detail = detailFromResult(version);
-      return {
+      return buildVersionProbeExitStatus({
         provider: CLAUDE_AGENT_PROVIDER,
-        status: "error" as const,
-        available: false,
-        authStatus: "unknown" as const,
         checkedAt,
-        message: detail
-          ? `Claude Agent CLI is installed but failed to run. ${detail}`
-          : "Claude Agent CLI is installed but failed to run.",
-      };
+        result: version,
+        messages: CLAUDE_CLI_PROBE_MESSAGES,
+      });
     }
 
     const claudeVersionMatch = CLI_VERSION_PATTERN.exec(`${version.stdout}\n${version.stderr}`);
@@ -560,31 +605,22 @@ export const makeCheckClaudeProviderStatus = (
     );
 
     if (Result.isFailure(authProbe)) {
-      const error = authProbe.failure;
-      return {
+      return buildAuthProbeFailureStatus({
         provider: CLAUDE_AGENT_PROVIDER,
-        status: "warning" as const,
-        available: true,
-        authStatus: "unknown" as const,
         checkedAt,
-        message:
-          error instanceof Error
-            ? `Could not verify Claude authentication status: ${error.message}.`
-            : "Could not verify Claude authentication status.",
+        error: authProbe.failure,
+        messages: CLAUDE_CLI_PROBE_MESSAGES,
         ...(claudeVersion ? { version: claudeVersion } : {}),
-      };
+      });
     }
 
     if (Option.isNone(authProbe.success)) {
-      return {
+      return buildAuthProbeTimeoutStatus({
         provider: CLAUDE_AGENT_PROVIDER,
-        status: "warning" as const,
-        available: true,
-        authStatus: "unknown" as const,
         checkedAt,
-        message: "Could not verify Claude authentication status. Timed out while running command.",
+        messages: CLAUDE_CLI_PROBE_MESSAGES,
         ...(claudeVersion ? { version: claudeVersion } : {}),
-      };
+      });
     }
 
     const parsed = parseClaudeAuthStatusFromOutput(authProbe.success.value);

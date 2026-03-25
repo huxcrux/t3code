@@ -298,6 +298,19 @@ describe("readCodexAccountSnapshot", () => {
       sparkEnabled: true,
     });
   });
+
+  it("falls back to an unknown plan type for unexpected chatgpt plan labels", () => {
+    expect(
+      readCodexAccountSnapshot({
+        type: "chatgpt",
+        planType: "mystery-tier",
+      }),
+    ).toEqual({
+      type: "chatgpt",
+      planType: "unknown",
+      sparkEnabled: false,
+    });
+  });
 });
 
 describe("resolveCodexModelForAccount", () => {

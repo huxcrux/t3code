@@ -508,21 +508,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.writeMessage(context, { method: "initialized" });
       try {
         const modelListResponse = await this.sendRequest(context, "model/list", {});
-        console.log("codex model/list response", modelListResponse);
+        const modelCount =
+          this.readArray(modelListResponse, "models")?.length ??
+          this.readArray(modelListResponse)?.length;
+        await Effect.logDebug("codex model/list completed", {
+          threadId,
+          ...(modelCount !== undefined ? { modelCount } : {}),
+        }).pipe(this.runPromise);
       } catch (error) {
-        console.log("codex model/list failed", error);
+        await Effect.logDebug("codex model/list failed", {
+          threadId,
+          cause: error instanceof Error ? error.message : String(error),
+        }).pipe(this.runPromise);
       }
       try {
         const accountReadResponse = await this.sendRequest(context, "account/read", {});
-        console.log("codex account/read response", accountReadResponse);
         context.account = readCodexAccountSnapshot(accountReadResponse);
-        console.log("codex subscription status", {
+        await Effect.logDebug("codex account/read completed", {
+          threadId,
           type: context.account.type,
           planType: context.account.planType,
           sparkEnabled: context.account.sparkEnabled,
-        });
+        }).pipe(this.runPromise);
       } catch (error) {
-        console.log("codex account/read failed", error);
+        await Effect.logDebug("codex account/read failed", {
+          threadId,
+          cause: error instanceof Error ? error.message : String(error),
+        }).pipe(this.runPromise);
       }
 
       const normalizedModel = resolveCodexModelForAccount(

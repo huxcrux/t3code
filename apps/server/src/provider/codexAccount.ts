@@ -1,7 +1,8 @@
-import { spawn } from "node:child_process";
-import readline from "node:readline";
-import { Effect, Exit, Schema } from "effect";
+import { Effect, Exit, Option, Ref, Schema, Stream } from "effect";
+import type * as PlatformError from "effect/PlatformError";
+import type * as Scope from "effect/Scope";
 import type { ProviderStartOptions } from "@t3tools/contracts";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import { extractPlanLabel } from "./authProbe";
 
 export type CodexPlanType =
@@ -25,6 +26,7 @@ const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "p
 const APP_SERVER_PROBE_TIMEOUT_MS = 4_000;
 const APP_SERVER_INITIALIZE_REQUEST_ID = 1;
 const APP_SERVER_ACCOUNT_READ_REQUEST_ID = 2;
+const APP_SERVER_REQUEST_ENCODER = new TextEncoder();
 const AppServerInitializeRequestSchema = Schema.Struct({
   id: Schema.Literal(APP_SERVER_INITIALIZE_REQUEST_ID),
   method: Schema.Literal("initialize"),
@@ -80,9 +82,29 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function isCodexPlanType(value: string): value is CodexPlanType {
+  switch (value) {
+    case "free":
+    case "go":
+    case "plus":
+    case "pro":
+    case "team":
+    case "business":
+    case "enterprise":
+    case "edu":
+    case "unknown":
+      return true;
+    default:
+      return false;
+  }
+}
+
 function readCodexPlanType(value: Record<string, unknown>): CodexPlanType | null {
   const planType = asString(value.planType) ?? asString(value.plan_type);
-  return (planType as CodexPlanType | undefined) ?? null;
+  if (!planType) {
+    return null;
+  }
+  return isCodexPlanType(planType) ? planType : "unknown";
 }
 
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
@@ -110,7 +132,7 @@ export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapsho
     return {
       type: "chatgpt",
       planType,
-      sparkEnabled: !CODEX_SPARK_DISABLED_PLAN_TYPES.has(planType),
+      sparkEnabled: planType !== "unknown" && !CODEX_SPARK_DISABLED_PLAN_TYPES.has(planType),
     };
   }
 
@@ -153,102 +175,85 @@ export function extractCodexAccountPlan(response: unknown): string | undefined {
 
 export function readCodexAccountPlanViaAppServer(
   codexOptions?: ProviderStartOptions["codex"],
-): Effect.Effect<string | undefined, never> {
-  return Effect.tryPromise(
-    (signal) =>
-      new Promise<string | undefined>((resolve, reject) => {
-        if (signal.aborted) {
-          resolve(undefined);
-          return;
-        }
+): Effect.Effect<string | undefined, never, ChildProcessSpawner.ChildProcessSpawner> {
+  const messages = [
+    APP_SERVER_REQUEST_ENCODER.encode(
+      `${encodeAppServerInitializeRequest({
+        id: APP_SERVER_INITIALIZE_REQUEST_ID,
+        method: "initialize",
+        params: buildCodexInitializeParams(),
+      })}\n`,
+    ),
+    APP_SERVER_REQUEST_ENCODER.encode(
+      `${encodeAppServerInitializedNotification({ method: "initialized" })}\n`,
+    ),
+    APP_SERVER_REQUEST_ENCODER.encode(
+      `${encodeAppServerAccountReadRequest({
+        id: APP_SERVER_ACCOUNT_READ_REQUEST_ID,
+        method: "account/read",
+        params: {},
+      })}\n`,
+    ),
+  ] as const;
 
-        const child = spawn(codexOptions?.binaryPath ?? "codex", ["app-server"], {
-          env: codexOptions?.homePath
-            ? { ...process.env, CODEX_HOME: codexOptions.homePath }
-            : process.env,
-          shell: process.platform === "win32",
-          stdio: ["pipe", "pipe", "pipe"],
-        });
-        let settled = false;
-        const output = readline.createInterface({ input: child.stdout });
-        let timeout: ReturnType<typeof setTimeout> | undefined;
+  const program: Effect.Effect<
+    string | undefined,
+    Error | PlatformError.PlatformError,
+    ChildProcessSpawner.ChildProcessSpawner | Scope.Scope
+  > = Effect.gen(function* () {
+    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
+    const child = yield* spawner.spawn(
+      ChildProcess.make(codexOptions?.binaryPath ?? "codex", ["app-server"], {
+        env: codexOptions?.homePath
+          ? { ...process.env, CODEX_HOME: codexOptions.homePath }
+          : process.env,
+        shell: process.platform === "win32",
+      }),
+    );
+    const planRef = yield* Ref.make<string | undefined>(undefined);
 
-        const cleanup = () => {
-          clearTimeout(timeout);
-          output.close();
-          signal.removeEventListener("abort", handleAbort);
-          child.stdin.off("error", fail);
-        };
-
-        const finish = (plan: string | undefined) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          child.kill();
-          resolve(plan);
-        };
-
-        const fail = (error: unknown) => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          child.kill();
-          reject(error);
-        };
-
-        const handleAbort = () => {
-          if (settled) return;
-          settled = true;
-          cleanup();
-          child.kill();
-          resolve(undefined);
-        };
-
-        timeout = setTimeout(() => {
-          finish(undefined);
-        }, APP_SERVER_PROBE_TIMEOUT_MS);
-
-        signal.addEventListener("abort", handleAbort, { once: true });
-        child.once("error", fail);
-        child.stdin.once("error", fail);
-        // Wait for `close`, not `exit`, so stdout has a chance to flush.
-        // The app-server can terminate quickly after writing the response,
-        // and resolving on `exit` can race the readline consumer.
-        child.once("close", () => finish(undefined));
-
-        output.on("line", (line) => {
+    const readPlan = Stream.decodeText(child.stdout).pipe(
+      Stream.splitLines,
+      Stream.runForEachWhile((line) =>
+        Effect.gen(function* () {
           const decoded = decodeAppServerResponse(line);
-          if (Exit.isFailure(decoded)) return;
+          if (Exit.isFailure(decoded)) {
+            return true;
+          }
+
           const record = decoded.value;
           if (record.id === APP_SERVER_INITIALIZE_REQUEST_ID) {
             if (record.error && typeof record.error === "object") {
-              fail(new Error("Codex app-server initialize failed."));
+              return yield* Effect.fail(new Error("Codex app-server initialize failed."));
             }
-            return;
+            return true;
           }
-          if (record.id !== APP_SERVER_ACCOUNT_READ_REQUEST_ID) return;
-          finish(
+          if (record.id !== APP_SERVER_ACCOUNT_READ_REQUEST_ID) {
+            return true;
+          }
+
+          yield* Ref.set(
+            planRef,
             record.error && typeof record.error === "object"
               ? undefined
               : extractCodexAccountPlan(record),
           );
-        });
+          return false;
+        }),
+      ),
+      Effect.flatMap(() => Ref.get(planRef)),
+    );
 
-        child.stdin.write(
-          `${encodeAppServerInitializeRequest({
-            id: APP_SERVER_INITIALIZE_REQUEST_ID,
-            method: "initialize",
-            params: buildCodexInitializeParams(),
-          })}\n`,
-        );
-        child.stdin.write(`${encodeAppServerInitializedNotification({ method: "initialized" })}\n`);
-        child.stdin.write(
-          `${encodeAppServerAccountReadRequest({
-            id: APP_SERVER_ACCOUNT_READ_REQUEST_ID,
-            method: "account/read",
-            params: {},
-          })}\n`,
-        );
-      }),
-  ).pipe(Effect.orElseSucceed(() => undefined));
+    return yield* Stream.run(Stream.fromIterable(messages), child.stdin).pipe(
+      Effect.flatMap(() => readPlan),
+      Effect.ensuring(child.kill().pipe(Effect.ignore)),
+    );
+  });
+
+  return program.pipe(
+    Effect.scoped,
+    Effect.timeoutOption(APP_SERVER_PROBE_TIMEOUT_MS),
+    Effect.map((result) => (Option.isSome(result) ? result.value : undefined)),
+    Effect.orElseSucceed(() => undefined),
+  );
 }

@@ -1,58 +1,94 @@
-import { EventEmitter } from "node:events";
-import { PassThrough } from "node:stream";
-import { describe, expect, it, vi } from "vitest";
-import { Effect } from "effect";
+import { describe, expect, it } from "vitest";
+import { Effect, Sink, Stream } from "effect";
+import * as PlatformError from "effect/PlatformError";
+import { ChildProcessSpawner } from "effect/unstable/process";
+
+import { readCodexAccountPlanViaAppServer } from "./codexAccount";
+
+const encoder = new TextEncoder();
+
+function mockHandle(input: {
+  readonly stdout?: ReadonlyArray<string>;
+  readonly stdin?: ChildProcessSpawner.ChildProcessHandle["stdin"];
+}) {
+  const stdoutChunks = input.stdout?.map((line) => encoder.encode(line)) ?? [];
+
+  return ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(0)),
+    isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    stdin: input.stdin ?? Sink.drain,
+    stdout: stdoutChunks.length > 0 ? Stream.fromIterable(stdoutChunks) : Stream.empty,
+    stderr: Stream.empty,
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+}
 
 describe("readCodexAccountPlanViaAppServer", () => {
+  it("returns the plan from the app-server account/read response", async () => {
+    const effect = readCodexAccountPlanViaAppServer().pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            mockHandle({
+              stdout: [
+                '{"id":1,"result":{}}\n',
+                '{"id":2,"result":{"account":{"type":"chatgpt","planType":"team"}}}\n',
+              ],
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await expect(Effect.runPromise(effect)).resolves.toBe("team");
+  });
+
   it("returns undefined when the codex binary fails to spawn", async () => {
-    vi.resetModules();
-    vi.doMock("node:child_process", () => ({
-      spawn: () => {
-        throw new Error("spawn codex ENOENT");
-      },
-    }));
+    const effect = readCodexAccountPlanViaAppServer().pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.fail(
+            PlatformError.systemError({
+              _tag: "NotFound",
+              module: "ChildProcess",
+              method: "spawn",
+              description: "spawn codex ENOENT",
+            }),
+          ),
+        ),
+      ),
+    );
 
-    const { readCodexAccountPlanViaAppServer } = await import("./codexAccount");
-
-    await expect(Effect.runPromise(readCodexAccountPlanViaAppServer())).resolves.toBeUndefined();
-
-    vi.doUnmock("node:child_process");
-    vi.resetModules();
+    await expect(Effect.runPromise(effect)).resolves.toBeUndefined();
   });
 
   it("returns undefined when the app-server stdin pipe closes during request writes", async () => {
-    vi.resetModules();
+    const effect = readCodexAccountPlanViaAppServer().pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            mockHandle({
+              stdin: Sink.failSync(() =>
+                PlatformError.systemError({
+                  _tag: "BadResource",
+                  module: "ChildProcess",
+                  method: "stdin.write",
+                  description: "write EPIPE",
+                }),
+              ),
+            }),
+          ),
+        ),
+      ),
+    );
 
-    class MockStdin extends EventEmitter {
-      private emittedError = false;
-
-      write() {
-        if (!this.emittedError) {
-          this.emittedError = true;
-          queueMicrotask(() => {
-            this.emit("error", new Error("write EPIPE"));
-          });
-        }
-        return false;
-      }
-    }
-
-    class MockChild extends EventEmitter {
-      readonly stdout = new PassThrough();
-      readonly stdin = new MockStdin();
-
-      kill() {}
-    }
-
-    vi.doMock("node:child_process", () => ({
-      spawn: () => new MockChild(),
-    }));
-
-    const { readCodexAccountPlanViaAppServer } = await import("./codexAccount");
-
-    await expect(Effect.runPromise(readCodexAccountPlanViaAppServer())).resolves.toBeUndefined();
-
-    vi.doUnmock("node:child_process");
-    vi.resetModules();
+    await expect(Effect.runPromise(effect)).resolves.toBeUndefined();
   });
 });
