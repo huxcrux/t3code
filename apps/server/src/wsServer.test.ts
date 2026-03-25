@@ -76,7 +76,7 @@ const defaultProviderStatuses: ReadonlyArray<ServerProviderStatus> = [
 
 const defaultProviderHealthService: ProviderHealthShape = {
   getStatuses: Effect.succeed(defaultProviderStatuses),
-  refreshStatuses: Effect.succeed(defaultProviderStatuses),
+  refreshStatuses: () => Effect.succeed(defaultProviderStatuses),
   refreshStatus: () => Effect.succeed(defaultProviderStatuses),
   login: () => Effect.succeed({ success: true, providers: defaultProviderStatuses }),
   logout: () => Effect.succeed({ success: true, providers: defaultProviderStatuses }),
@@ -1143,7 +1143,7 @@ describe("WebSocket Server", () => {
       cwd: "/my/workspace",
       providerHealth: {
         getStatuses: Effect.succeed(defaultProviderStatuses),
-        refreshStatuses: Effect.succeed(refreshedProviders),
+        refreshStatuses: () => Effect.succeed(refreshedProviders),
         refreshStatus: () => Effect.succeed(refreshedProviders),
         login: () => Effect.succeed({ success: true, providers: refreshedProviders }),
         logout: () => Effect.succeed({ success: true, providers: refreshedProviders }),
@@ -1185,7 +1185,7 @@ describe("WebSocket Server", () => {
       cwd: "/my/workspace",
       providerHealth: {
         getStatuses: Effect.succeed(defaultProviderStatuses),
-        refreshStatuses: Effect.succeed(defaultProviderStatuses),
+        refreshStatuses: () => Effect.succeed(defaultProviderStatuses),
         refreshStatus: (provider) => {
           expect(provider).toBe("codex");
           return Effect.succeed(refreshedProviders);

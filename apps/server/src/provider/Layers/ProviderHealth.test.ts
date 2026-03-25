@@ -386,6 +386,17 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
       assert.strictEqual(parsed.plan, "team");
     });
 
+    it("extracts snake_case plan fields from JSON output", () => {
+      const parsed = parseAuthStatusFromOutput({
+        stdout: '{"authenticated":true,"account":{"plan_type":"pro"}}\n',
+        stderr: "",
+        code: 0,
+      });
+      assert.strictEqual(parsed.status, "ready");
+      assert.strictEqual(parsed.authStatus, "authenticated");
+      assert.strictEqual(parsed.plan, "pro");
+    });
+
     it("JSON without auth marker is warning", () => {
       const parsed = parseAuthStatusFromOutput({
         stdout: '[{"ok":true}]\n',
@@ -411,6 +422,20 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
         "pro",
       );
     });
+
+    it("extracts snake_case plan fields from account/read responses", () => {
+      assert.strictEqual(
+        extractCodexAccountPlan({
+          result: {
+            account: {
+              type: "chatgpt",
+              plan_type: "team",
+            },
+          },
+        }),
+        "team",
+      );
+    });
   });
 
   // ── readCodexConfigModelProvider tests ─────────────────────────────
@@ -419,28 +444,28 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it.effect("returns undefined when config file does not exist", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();
-        assert.strictEqual(yield* readCodexConfigModelProvider, undefined);
+        assert.strictEqual(yield* readCodexConfigModelProvider(), undefined);
       }),
     );
 
     it.effect("returns undefined when config has no model_provider key", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome('model = "gpt-5-codex"\n');
-        assert.strictEqual(yield* readCodexConfigModelProvider, undefined);
+        assert.strictEqual(yield* readCodexConfigModelProvider(), undefined);
       }),
     );
 
     it.effect("returns the provider when model_provider is set at top level", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome('model = "gpt-5-codex"\nmodel_provider = "portkey"\n');
-        assert.strictEqual(yield* readCodexConfigModelProvider, "portkey");
+        assert.strictEqual(yield* readCodexConfigModelProvider(), "portkey");
       }),
     );
 
     it.effect("returns openai when model_provider is openai", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome('model_provider = "openai"\n');
-        assert.strictEqual(yield* readCodexConfigModelProvider, "openai");
+        assert.strictEqual(yield* readCodexConfigModelProvider(), "openai");
       }),
     );
 
@@ -456,7 +481,7 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             "",
           ].join("\n"),
         );
-        assert.strictEqual(yield* readCodexConfigModelProvider, undefined);
+        assert.strictEqual(yield* readCodexConfigModelProvider(), undefined);
       }),
     );
 
@@ -472,14 +497,14 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             'model = "gpt-5-pro"',
           ].join("\n"),
         );
-        assert.strictEqual(yield* readCodexConfigModelProvider, "azure");
+        assert.strictEqual(yield* readCodexConfigModelProvider(), "azure");
       }),
     );
 
     it.effect("handles single-quoted values in TOML", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome("model_provider = 'mistral'\n");
-        assert.strictEqual(yield* readCodexConfigModelProvider, "mistral");
+        assert.strictEqual(yield* readCodexConfigModelProvider(), "mistral");
       }),
     );
   });

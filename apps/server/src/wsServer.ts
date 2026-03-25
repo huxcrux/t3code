@@ -885,24 +885,25 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         };
 
       case WS_METHODS.serverRefreshProviderStatuses: {
-        const providers = yield* providerHealth.refreshStatuses;
+        const body = stripRequestTag(request.body);
+        const providers = yield* providerHealth.refreshStatuses(body.providerOptions);
         return { providers };
       }
 
       case WS_METHODS.serverRefreshProviderStatus: {
         const body = stripRequestTag(request.body);
-        const providers = yield* providerHealth.refreshStatus(body.provider);
+        const providers = yield* providerHealth.refreshStatus(body.provider, body.providerOptions);
         return { providers };
       }
 
       case WS_METHODS.serverProviderLogin: {
         const body = stripRequestTag(request.body);
-        return yield* providerHealth.login(body.provider);
+        return yield* providerHealth.login(body.provider, body.providerOptions);
       }
 
       case WS_METHODS.serverProviderLogout: {
         const body = stripRequestTag(request.body);
-        return yield* providerHealth.logout(body.provider);
+        return yield* providerHealth.logout(body.provider, body.providerOptions);
       }
 
       case WS_METHODS.serverUpsertKeybinding: {

@@ -6,7 +6,7 @@
  *
  * @module ProviderHealth
  */
-import type { ProviderKind, ServerProviderStatus } from "@t3tools/contracts";
+import type { ProviderKind, ProviderStartOptions, ServerProviderStatus } from "@t3tools/contracts";
 import { ServiceMap } from "effect";
 import type { Effect } from "effect";
 
@@ -25,24 +25,33 @@ export interface ProviderHealthShape {
   /**
    * Re-run provider health probes and update the cached snapshot.
    */
-  readonly refreshStatuses: Effect.Effect<ReadonlyArray<ServerProviderStatus>>;
+  readonly refreshStatuses: (
+    providerOptions?: ProviderStartOptions,
+  ) => Effect.Effect<ReadonlyArray<ServerProviderStatus>>;
 
   /**
    * Re-run provider health probes for a single provider and update the cached snapshot.
    */
   readonly refreshStatus: (
     provider: ProviderKind,
+    providerOptions?: ProviderStartOptions,
   ) => Effect.Effect<ReadonlyArray<ServerProviderStatus>>;
 
   /**
    * Run the login command for a provider and refresh statuses.
    */
-  readonly login: (provider: ProviderKind) => Effect.Effect<ProviderAuthActionResult>;
+  readonly login: (
+    provider: ProviderKind,
+    providerOptions?: ProviderStartOptions,
+  ) => Effect.Effect<ProviderAuthActionResult>;
 
   /**
    * Run the logout command for a provider and refresh statuses.
    */
-  readonly logout: (provider: ProviderKind) => Effect.Effect<ProviderAuthActionResult>;
+  readonly logout: (
+    provider: ProviderKind,
+    providerOptions?: ProviderStartOptions,
+  ) => Effect.Effect<ProviderAuthActionResult>;
 }
 
 export class ProviderHealth extends ServiceMap.Service<ProviderHealth, ProviderHealthShape>()(

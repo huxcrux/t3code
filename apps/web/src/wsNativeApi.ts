@@ -178,7 +178,8 @@ export function createWsNativeApi(): NativeApi {
     },
     server: {
       getConfig: () => transport.request(WS_METHODS.serverGetConfig),
-      refreshProviderStatuses: () => transport.request(WS_METHODS.serverRefreshProviderStatuses),
+      refreshProviderStatuses: (input) =>
+        transport.request(WS_METHODS.serverRefreshProviderStatuses, input),
       refreshProviderStatus: (input) =>
         transport.request(WS_METHODS.serverRefreshProviderStatus, input),
       providerLogin: (input) => transport.request(WS_METHODS.serverProviderLogin, input),

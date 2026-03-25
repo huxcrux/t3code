@@ -2,7 +2,7 @@ import { Schema } from "effect";
 import { IsoDateTime, TrimmedNonEmptyString } from "./baseSchemas";
 import { KeybindingRule, ResolvedKeybindingsConfig } from "./keybindings";
 import { EditorId } from "./editor";
-import { ProviderKind } from "./orchestration";
+import { ProviderKind, ProviderStartOptions } from "./orchestration";
 
 const KeybindingsMalformedConfigIssue = Schema.Struct({
   kind: Schema.Literal("keybindings.malformed-config"),
@@ -77,8 +77,14 @@ export const ServerRefreshProviderStatusesResult = Schema.Struct({
 });
 export type ServerRefreshProviderStatusesResult = typeof ServerRefreshProviderStatusesResult.Type;
 
+export const ServerRefreshProviderStatusesInput = Schema.Struct({
+  providerOptions: Schema.optional(ProviderStartOptions),
+});
+export type ServerRefreshProviderStatusesInput = typeof ServerRefreshProviderStatusesInput.Type;
+
 export const ServerRefreshProviderStatusInput = Schema.Struct({
   provider: ProviderKind,
+  providerOptions: Schema.optional(ProviderStartOptions),
 });
 export type ServerRefreshProviderStatusInput = typeof ServerRefreshProviderStatusInput.Type;
 
@@ -89,6 +95,7 @@ export type ServerRefreshProviderStatusResult = typeof ServerRefreshProviderStat
 
 export const ServerProviderAuthActionInput = Schema.Struct({
   provider: ProviderKind,
+  providerOptions: Schema.optional(ProviderStartOptions),
 });
 export type ServerProviderAuthActionInput = typeof ServerProviderAuthActionInput.Type;
 

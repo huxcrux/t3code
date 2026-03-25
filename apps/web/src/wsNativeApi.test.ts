@@ -242,7 +242,7 @@ describe("wsNativeApi", () => {
     await expect(api.server.refreshProviderStatuses()).resolves.toEqual({
       providers: defaultProviders,
     });
-    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverRefreshProviderStatuses);
+    expect(requestMock).toHaveBeenCalledWith(WS_METHODS.serverRefreshProviderStatuses, undefined);
   });
 
   it("requests a single provider status refresh through server RPC", async () => {

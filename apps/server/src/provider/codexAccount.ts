@@ -1,5 +1,7 @@
-import { Effect, Exit, Option, Ref, Schema, Stream } from "effect";
-import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import { spawn } from "node:child_process";
+import readline from "node:readline";
+import { Effect, Exit, Schema } from "effect";
+import type { ProviderStartOptions } from "@t3tools/contracts";
 import { extractPlanLabel } from "./authProbe";
 
 export type CodexPlanType =
@@ -23,8 +25,6 @@ const CODEX_SPARK_DISABLED_PLAN_TYPES = new Set<CodexPlanType>(["free", "go", "p
 const APP_SERVER_PROBE_TIMEOUT_MS = 4_000;
 const APP_SERVER_INITIALIZE_REQUEST_ID = 1;
 const APP_SERVER_ACCOUNT_READ_REQUEST_ID = 2;
-const encoder = new TextEncoder();
-
 const AppServerInitializeRequestSchema = Schema.Struct({
   id: Schema.Literal(APP_SERVER_INITIALIZE_REQUEST_ID),
   method: Schema.Literal("initialize"),
@@ -80,9 +80,21 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function readCodexPlanType(value: Record<string, unknown>): CodexPlanType | null {
+  const planType = asString(value.planType) ?? asString(value.plan_type);
+  return (planType as CodexPlanType | undefined) ?? null;
+}
+
 export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapshot {
   const record = asObject(response);
   const account = asObject(record?.account) ?? record;
+  if (!account) {
+    return {
+      type: "unknown",
+      planType: null,
+      sparkEnabled: true,
+    };
+  }
   const accountType = asString(account?.type);
 
   if (accountType === "apiKey") {
@@ -94,7 +106,7 @@ export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapsho
   }
 
   if (accountType === "chatgpt") {
-    const planType = (account?.planType as CodexPlanType | null) ?? "unknown";
+    const planType = readCodexPlanType(account) ?? "unknown";
     return {
       type: "chatgpt",
       planType,
@@ -139,85 +151,86 @@ export function extractCodexAccountPlan(response: unknown): string | undefined {
   return extractPlanLabel(record.result ?? response);
 }
 
-function encodeJsonRpcMessage(message: string): Uint8Array {
-  return encoder.encode(`${message}\n`);
-}
+export function readCodexAccountPlanViaAppServer(
+  codexOptions?: ProviderStartOptions["codex"],
+): Effect.Effect<string | undefined, never> {
+  return Effect.promise(
+    () =>
+      new Promise<string | undefined>((resolve, reject) => {
+        const child = spawn(codexOptions?.binaryPath ?? "codex", ["app-server"], {
+          env: codexOptions?.homePath
+            ? { ...process.env, CODEX_HOME: codexOptions.homePath }
+            : process.env,
+          shell: process.platform === "win32",
+          stdio: ["pipe", "pipe", "pipe"],
+        });
+        let settled = false;
+        const output = readline.createInterface({ input: child.stdout });
+        const timeout = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          output.close();
+          child.kill();
+          resolve(undefined);
+        }, APP_SERVER_PROBE_TIMEOUT_MS);
 
-export function readCodexAccountPlanViaAppServer(): Effect.Effect<
-  string | undefined,
-  never,
-  ChildProcessSpawner.ChildProcessSpawner
-> {
-  return Effect.gen(function* () {
-    const spawner = yield* ChildProcessSpawner.ChildProcessSpawner;
-    const probeResultRef = yield* Ref.make<{ done: boolean; plan: string | undefined }>({
-      done: false,
-      plan: undefined,
-    });
-    const command = ChildProcess.make("codex", ["app-server"], {
-      shell: process.platform === "win32",
-      stdin: {
-        stream: Stream.make(
-          encodeJsonRpcMessage(
-            encodeAppServerInitializeRequest({
-              id: APP_SERVER_INITIALIZE_REQUEST_ID,
-              method: "initialize",
-              params: buildCodexInitializeParams(),
-            }),
-          ),
-          encodeJsonRpcMessage(encodeAppServerInitializedNotification({ method: "initialized" })),
-          encodeJsonRpcMessage(
-            encodeAppServerAccountReadRequest({
-              id: APP_SERVER_ACCOUNT_READ_REQUEST_ID,
-              method: "account/read",
-              params: {},
-            }),
-          ),
-        ),
-      },
-    });
+        const cleanup = () => {
+          clearTimeout(timeout);
+          output.close();
+        };
 
-    yield* spawner.streamLines(command).pipe(
-      Stream.runForEachWhile((line) =>
-        Effect.gen(function* () {
+        const finish = (plan: string | undefined) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          child.kill();
+          resolve(plan);
+        };
+
+        const fail = (error: unknown) => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          child.kill();
+          reject(error);
+        };
+
+        child.once("error", fail);
+        child.once("exit", () => finish(undefined));
+
+        output.on("line", (line) => {
           const decoded = decodeAppServerResponse(line);
-          if (Exit.isFailure(decoded)) {
-            return true;
-          }
+          if (Exit.isFailure(decoded)) return;
           const record = decoded.value;
-          const id = record.id;
-          if (id === APP_SERVER_INITIALIZE_REQUEST_ID) {
+          if (record.id === APP_SERVER_INITIALIZE_REQUEST_ID) {
             if (record.error && typeof record.error === "object") {
-              return yield* Effect.fail(new Error("Codex app-server initialize failed."));
+              fail(new Error("Codex app-server initialize failed."));
             }
-            return true;
+            return;
           }
-          if (id !== APP_SERVER_ACCOUNT_READ_REQUEST_ID) {
-            return true;
-          }
-          yield* Ref.set(probeResultRef, {
-            done: true,
-            plan:
-              record.error && typeof record.error === "object"
-                ? undefined
-                : extractCodexAccountPlan(record),
-          });
-          return false;
-        }),
-      ),
-    );
+          if (record.id !== APP_SERVER_ACCOUNT_READ_REQUEST_ID) return;
+          finish(
+            record.error && typeof record.error === "object"
+              ? undefined
+              : extractCodexAccountPlan(record),
+          );
+        });
 
-    const probeResult = yield* Ref.get(probeResultRef);
-    if (probeResult.done) {
-      return probeResult.plan;
-    }
-    return yield* Effect.fail(
-      new Error("Codex app-server exited before account data was available."),
-    );
-  }).pipe(
-    Effect.scoped,
-    Effect.timeoutOption(APP_SERVER_PROBE_TIMEOUT_MS),
-    Effect.map((result) => (Option.isSome(result) ? result.value : undefined)),
-    Effect.orElseSucceed(() => undefined),
-  );
+        child.stdin.write(
+          `${encodeAppServerInitializeRequest({
+            id: APP_SERVER_INITIALIZE_REQUEST_ID,
+            method: "initialize",
+            params: buildCodexInitializeParams(),
+          })}\n`,
+        );
+        child.stdin.write(`${encodeAppServerInitializedNotification({ method: "initialized" })}\n`);
+        child.stdin.write(
+          `${encodeAppServerAccountReadRequest({
+            id: APP_SERVER_ACCOUNT_READ_REQUEST_ID,
+            method: "account/read",
+            params: {},
+          })}\n`,
+        );
+      }),
+  ).pipe(Effect.orElseSucceed(() => undefined));
 }

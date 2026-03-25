@@ -40,6 +40,7 @@ import { OpenInEditorInput } from "./editor";
 import {
   ServerConfigUpdatedPayload,
   ServerProviderAuthActionInput,
+  ServerRefreshProviderStatusesInput,
   ServerRefreshProviderStatusInput,
 } from "./server";
 
@@ -148,7 +149,7 @@ const WebSocketRequestBody = Schema.Union([
 
   // Server meta
   tagRequestBody(WS_METHODS.serverGetConfig, Schema.Struct({})),
-  tagRequestBody(WS_METHODS.serverRefreshProviderStatuses, Schema.Struct({})),
+  tagRequestBody(WS_METHODS.serverRefreshProviderStatuses, ServerRefreshProviderStatusesInput),
   tagRequestBody(WS_METHODS.serverRefreshProviderStatus, ServerRefreshProviderStatusInput),
   tagRequestBody(WS_METHODS.serverProviderLogin, ServerProviderAuthActionInput),
   tagRequestBody(WS_METHODS.serverProviderLogout, ServerProviderAuthActionInput),

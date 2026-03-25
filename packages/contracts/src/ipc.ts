@@ -29,6 +29,7 @@ import type {
   ServerConfig,
   ServerProviderAuthActionInput,
   ServerProviderAuthActionResult,
+  ServerRefreshProviderStatusesInput,
   ServerRefreshProviderStatusInput,
   ServerRefreshProviderStatusResult,
   ServerRefreshProviderStatusesResult,
@@ -167,7 +168,9 @@ export interface NativeApi {
   };
   server: {
     getConfig: () => Promise<ServerConfig>;
-    refreshProviderStatuses: () => Promise<ServerRefreshProviderStatusesResult>;
+    refreshProviderStatuses: (
+      input?: ServerRefreshProviderStatusesInput,
+    ) => Promise<ServerRefreshProviderStatusesResult>;
     refreshProviderStatus: (
       input: ServerRefreshProviderStatusInput,
     ) => Promise<ServerRefreshProviderStatusResult>;

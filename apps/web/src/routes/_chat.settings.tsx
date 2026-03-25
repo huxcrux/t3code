@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
+  AlertTriangleIcon,
   ChevronDownIcon,
-  EllipsisVerticalIcon,
   LogInIcon,
   LogOutIcon,
   PlusIcon,
@@ -11,14 +11,19 @@ import {
   Undo2Icon,
   XIcon,
 } from "lucide-react";
-import { type ReactNode, useCallback, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import {
   type ProviderKind,
   type ServerConfig,
   type ServerProviderStatus,
 } from "@t3tools/contracts";
 import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
-import { isProviderEnabled, patchProviderEnabled, useAppSettings } from "../appSettings";
+import {
+  getProviderStartOptions,
+  isProviderEnabled,
+  patchProviderEnabled,
+  useAppSettings,
+} from "../appSettings";
 import {
   getCustomModelOptionsByProvider,
   getCustomModelsForProvider,
@@ -42,7 +47,6 @@ import { SidebarTrigger } from "../components/ui/sidebar";
 import { Switch } from "../components/ui/switch";
 import { ProviderModelPicker } from "../components/chat/ProviderModelPicker";
 import { TraitsPicker } from "../components/chat/TraitsPicker";
-import { Menu, MenuItem, MenuPopup, MenuTrigger } from "../components/ui/menu";
 import { SidebarInset } from "../components/ui/sidebar";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../components/ui/tooltip";
 import { resolveAndPersistPreferredEditor } from "../editorPreferences";
@@ -88,8 +92,8 @@ type InstallProviderSettings = {
   homeDescription?: ReactNode;
 };
 
-const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
-  {
+const INSTALL_PROVIDER_SETTINGS_BY_PROVIDER: Record<ProviderKind, InstallProviderSettings> = {
+  codex: {
     provider: "codex",
     title: "Codex",
     binaryPathKey: "codexBinaryPath",
@@ -103,7 +107,7 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
     homePlaceholder: "CODEX_HOME",
     homeDescription: "Optional custom Codex home and config directory.",
   },
-  {
+  claudeAgent: {
     provider: "claudeAgent",
     title: "Claude",
     binaryPathKey: "claudeBinaryPath",
@@ -114,7 +118,7 @@ const INSTALL_PROVIDER_SETTINGS: readonly InstallProviderSettings[] = [
       </>
     ),
   },
-];
+};
 
 function providerStatusDotClass(status: ServerProviderStatus["status"]): string {
   switch (status) {
@@ -128,21 +132,47 @@ function providerStatusDotClass(status: ServerProviderStatus["status"]): string 
   }
 }
 
-function providerStatusLabel(status: ServerProviderStatus): string {
+function providerStatusSummary(status: ServerProviderStatus | undefined): string {
+  if (!status) return "Unknown";
+  if (status.available && status.authStatus === "authenticated") return "Ready to use";
   if (!status.available) return "Not found";
-  if (status.authStatus === "unauthenticated") return "Unauthed";
-  if (status.status === "ready") return "Ready";
+  if (status.authStatus === "unauthenticated") return "Not authenticated";
+  if (status.status === "ready") return "Detected";
   if (status.status === "warning") return "Warning";
   return "Error";
 }
 
-function providerStatusSummary(status: ServerProviderStatus | undefined): string {
-  if (!status) return "Unknown";
-  if (!status.available) return "Not found";
+function shouldShowProviderAlert(status: ServerProviderStatus | undefined): boolean {
+  if (!status) return false;
+  return !status.available || status.authStatus === "unauthenticated";
+}
+
+function providerAlertTitle(status: ServerProviderStatus | undefined): string {
+  if (!status || !status.available) return "Provider not found";
   if (status.authStatus === "unauthenticated") return "Not authenticated";
-  if (status.status === "ready") return "Authenticated";
-  if (status.status === "warning") return "Warning";
-  return "Error";
+  return "Provider issue";
+}
+
+function providerAlertDescription(
+  providerTitle: string,
+  status: ServerProviderStatus | undefined,
+): string {
+  if (!status || !status.available) {
+    return "The default CLI for this provider could not be detected on your PATH. Install it, update your PATH, or use the binary path override below for new sessions.";
+  }
+  if (status.authStatus === "unauthenticated") {
+    return `Log in to ${providerTitle} to start using its models.`;
+  }
+  return `${providerTitle} needs attention.`;
+}
+
+function providerAuthDescription(status: ServerProviderStatus | undefined): string {
+  if (!status || !status.available) return "CLI not detected for this provider.";
+  if (status.authStatus === "authenticated") return "Authenticated and ready to use.";
+  if (status.authStatus === "unauthenticated") {
+    return "Provider available but not authenticated.";
+  }
+  return status.message ?? "Provider available, but authentication could not be verified.";
 }
 
 function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
@@ -168,7 +198,7 @@ function SettingsRow({
   onClick,
 }: {
   title: string;
-  description: string;
+  description: ReactNode;
   status?: ReactNode;
   resetAction?: ReactNode;
   control?: ReactNode;
@@ -242,12 +272,10 @@ function SettingsRouteView() {
   const [refreshProviderStatusesError, setRefreshProviderStatusesError] = useState<string | null>(
     null,
   );
-  const [openInstallProviders, setOpenInstallProviders] = useState<Record<ProviderKind, boolean>>({
-    codex: Boolean(settings.codexBinaryPath || settings.codexHomePath),
-    claudeAgent: Boolean(settings.claudeBinaryPath),
+  const [openProviderPanels, setOpenProviderPanels] = useState<Record<ProviderKind, boolean>>({
+    codex: false,
+    claudeAgent: false,
   });
-  const [selectedCustomModelProvider, setSelectedCustomModelProvider] =
-    useState<ProviderKind>("codex");
   const [customModelInputByProvider, setCustomModelInputByProvider] = useState<
     Record<ProviderKind, string>
   >({
@@ -257,7 +285,12 @@ function SettingsRouteView() {
   const [customModelErrorByProvider, setCustomModelErrorByProvider] = useState<
     Partial<Record<ProviderKind, string | null>>
   >({});
-  const [showAllCustomModels, setShowAllCustomModels] = useState(false);
+  const [showAllCustomModelsByProvider, setShowAllCustomModelsByProvider] = useState<
+    Record<ProviderKind, boolean>
+  >({
+    codex: false,
+    claudeAgent: false,
+  });
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
@@ -265,6 +298,7 @@ function SettingsRouteView() {
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
   const providerStatuses = serverConfigQuery.data?.providers ?? [];
+  const providerStartOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
 
   const updateProviderStatuses = useCallback(
     (providers: ServerConfig["providers"]) => {
@@ -277,7 +311,10 @@ function SettingsRouteView() {
 
   const refreshProviderStatusMutation = useMutation({
     mutationFn: async (provider: ProviderKind) =>
-      ensureNativeApi().server.refreshProviderStatus({ provider }),
+      ensureNativeApi().server.refreshProviderStatus({
+        provider,
+        providerOptions: providerStartOptions,
+      }),
     onMutate: () => {
       setRefreshProviderStatusesError(null);
     },
@@ -291,7 +328,10 @@ function SettingsRouteView() {
 
   const providerLoginMutation = useMutation({
     mutationFn: async (provider: ProviderKind) =>
-      ensureNativeApi().server.providerLogin({ provider }),
+      ensureNativeApi().server.providerLogin({
+        provider,
+        providerOptions: providerStartOptions,
+      }),
     onMutate: () => {
       setRefreshProviderStatusesError(null);
     },
@@ -310,7 +350,10 @@ function SettingsRouteView() {
 
   const providerLogoutMutation = useMutation({
     mutationFn: async (provider: ProviderKind) =>
-      ensureNativeApi().server.providerLogout({ provider }),
+      ensureNativeApi().server.providerLogout({
+        provider,
+        providerOptions: providerStartOptions,
+      }),
     onMutate: () => {
       setRefreshProviderStatusesError(null);
     },
@@ -336,23 +379,6 @@ function SettingsRouteView() {
     textGenProvider,
     textGenModel,
   );
-  const selectedCustomModelProviderSettings = MODEL_PROVIDER_SETTINGS.find(
-    (providerSettings) => providerSettings.provider === selectedCustomModelProvider,
-  )!;
-  const selectedCustomModelInput = customModelInputByProvider[selectedCustomModelProvider];
-  const selectedCustomModelError = customModelErrorByProvider[selectedCustomModelProvider] ?? null;
-  const totalCustomModels = settings.customCodexModels.length + settings.customClaudeModels.length;
-  const savedCustomModelRows = MODEL_PROVIDER_SETTINGS.flatMap((providerSettings) =>
-    getCustomModelsForProvider(settings, providerSettings.provider).map((slug) => ({
-      key: `${providerSettings.provider}:${slug}`,
-      provider: providerSettings.provider,
-      providerTitle: providerSettings.title,
-      slug,
-    })),
-  );
-  const visibleCustomModelRows = showAllCustomModels
-    ? savedCustomModelRows
-    : savedCustomModelRows.slice(0, 5);
   const isInstallSettingsDirty =
     settings.claudeBinaryPath !== defaults.claudeBinaryPath ||
     settings.codexBinaryPath !== defaults.codexBinaryPath ||
@@ -469,6 +495,22 @@ function SettingsRouteView() {
     [settings, updateSettings],
   );
 
+  useEffect(() => {
+    if (!providerStartOptions) return;
+    if (serverConfigQuery.data == null) return;
+
+    void ensureNativeApi()
+      .server.refreshProviderStatuses({ providerOptions: providerStartOptions })
+      .then((result) => {
+        updateProviderStatuses(result.providers);
+      })
+      .catch((error) => {
+        setRefreshProviderStatusesError(
+          error instanceof Error ? error.message : "Unable to refresh provider statuses.",
+        );
+      });
+  }, [providerStartOptions, serverConfigQuery.data, updateProviderStatuses]);
+
   async function restoreDefaults() {
     if (changedSettingLabels.length === 0) return;
 
@@ -482,16 +524,15 @@ function SettingsRouteView() {
 
     setTheme("system");
     resetSettings();
-    setOpenInstallProviders({
-      codex: false,
-      claudeAgent: false,
-    });
-    setSelectedCustomModelProvider("codex");
     setCustomModelInputByProvider({
       codex: "",
       claudeAgent: "",
     });
     setCustomModelErrorByProvider({});
+    setShowAllCustomModelsByProvider({
+      codex: false,
+      claudeAgent: false,
+    });
   }
 
   return (
@@ -804,146 +845,48 @@ function SettingsRouteView() {
                   </div>
                 }
               />
-
-              <SettingsRow
-                title="Custom models"
-                description="Add custom model slugs for supported providers."
-                resetAction={
-                  totalCustomModels > 0 ? (
-                    <SettingResetButton
-                      label="custom models"
-                      onClick={() => {
-                        updateSettings({
-                          customCodexModels: defaults.customCodexModels,
-                          customClaudeModels: defaults.customClaudeModels,
-                        });
-                        setCustomModelErrorByProvider({});
-                        setShowAllCustomModels(false);
-                      }}
-                    />
-                  ) : null
-                }
-              >
-                <div className="mt-4 border-t border-border pt-4">
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <Select
-                      value={selectedCustomModelProvider}
-                      onValueChange={(value) => {
-                        if (value !== "codex" && value !== "claudeAgent") {
-                          return;
-                        }
-                        setSelectedCustomModelProvider(value);
-                      }}
-                    >
-                      <SelectTrigger
-                        size="sm"
-                        className="w-full sm:w-40"
-                        aria-label="Custom model provider"
-                      >
-                        <SelectValue>{selectedCustomModelProviderSettings.title}</SelectValue>
-                      </SelectTrigger>
-                      <SelectPopup align="start" alignItemWithTrigger={false}>
-                        {MODEL_PROVIDER_SETTINGS.map((providerSettings) => (
-                          <SelectItem
-                            hideIndicator
-                            className="min-h-7 text-sm"
-                            key={providerSettings.provider}
-                            value={providerSettings.provider}
-                          >
-                            {providerSettings.title}
-                          </SelectItem>
-                        ))}
-                      </SelectPopup>
-                    </Select>
-                    <Input
-                      id="custom-model-slug"
-                      value={selectedCustomModelInput}
-                      onChange={(event) => {
-                        const value = event.target.value;
-                        setCustomModelInputByProvider((existing) => ({
-                          ...existing,
-                          [selectedCustomModelProvider]: value,
-                        }));
-                        if (selectedCustomModelError) {
-                          setCustomModelErrorByProvider((existing) => ({
-                            ...existing,
-                            [selectedCustomModelProvider]: null,
-                          }));
-                        }
-                      }}
-                      onKeyDown={(event) => {
-                        if (event.key !== "Enter") return;
-                        event.preventDefault();
-                        addCustomModel(selectedCustomModelProvider);
-                      }}
-                      placeholder={selectedCustomModelProviderSettings.example}
-                      spellCheck={false}
-                    />
-                    <Button
-                      className="shrink-0"
-                      variant="outline"
-                      onClick={() => addCustomModel(selectedCustomModelProvider)}
-                    >
-                      <PlusIcon className="size-3.5" />
-                      Add
-                    </Button>
-                  </div>
-
-                  {selectedCustomModelError ? (
-                    <p className="mt-2 text-xs text-destructive">{selectedCustomModelError}</p>
-                  ) : null}
-
-                  {totalCustomModels > 0 ? (
-                    <div className="mt-3">
-                      <div>
-                        {visibleCustomModelRows.map((row) => (
-                          <div
-                            key={row.key}
-                            className="group grid grid-cols-[minmax(5rem,6rem)_minmax(0,1fr)_auto] items-center gap-3 border-t border-border/60 px-4 py-2 first:border-t-0"
-                          >
-                            <span className="truncate text-xs text-muted-foreground">
-                              {row.providerTitle}
-                            </span>
-                            <code className="min-w-0 truncate text-sm text-foreground">
-                              {row.slug}
-                            </code>
-                            <button
-                              type="button"
-                              className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
-                              aria-label={`Remove ${row.slug}`}
-                              onClick={() => removeCustomModel(row.provider, row.slug)}
-                            >
-                              <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
-                            </button>
-                          </div>
-                        ))}
-                      </div>
-
-                      {savedCustomModelRows.length > 5 ? (
-                        <button
-                          type="button"
-                          className="mt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
-                          onClick={() => setShowAllCustomModels((value) => !value)}
-                        >
-                          {showAllCustomModels
-                            ? "Show less"
-                            : `Show more (${savedCustomModelRows.length - 5})`}
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                </div>
-              </SettingsRow>
             </SettingsSection>
 
-            <SettingsSection title="Providers">
-              <div className="divide-y divide-border">
+            <section className="space-y-3">
+              <h2 className="text-[11px] font-medium uppercase tracking-[0.14em] text-muted-foreground">
+                Providers
+              </h2>
+              <div className="space-y-3">
                 {MODEL_PROVIDER_SETTINGS.map((providerSettings) => {
+                  const isOpen = openProviderPanels[providerSettings.provider];
+                  const installProviderSettings =
+                    INSTALL_PROVIDER_SETTINGS_BY_PROVIDER[providerSettings.provider];
                   const providerStatus = providerStatuses.find(
                     (status) => status.provider === providerSettings.provider,
                   );
                   const enabled = isProviderEnabled(settings, providerSettings.provider);
                   const isDisabled = !enabled;
+                  const isCliDetected = providerStatus?.available === true;
+                  const binaryPathValue =
+                    installProviderSettings.binaryPathKey === "claudeBinaryPath"
+                      ? claudeBinaryPath
+                      : codexBinaryPath;
+                  const isInstallOverrideDirty =
+                    providerSettings.provider === "codex"
+                      ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
+                        settings.codexHomePath !== defaults.codexHomePath
+                      : settings.claudeBinaryPath !== defaults.claudeBinaryPath;
+                  const customModels = getCustomModelsForProvider(
+                    settings,
+                    providerSettings.provider,
+                  );
+                  const customModelInput = customModelInputByProvider[providerSettings.provider];
+                  const customModelError =
+                    customModelErrorByProvider[providerSettings.provider] ?? null;
+                  const showAllCustomModels =
+                    showAllCustomModelsByProvider[providerSettings.provider];
+                  const visibleCustomModels = showAllCustomModels
+                    ? customModels
+                    : customModels.slice(0, 5);
+                  const areCustomModelsDirty =
+                    getCustomModelsForProvider(defaults, providerSettings.provider).join(
+                      "\u0000",
+                    ) !== customModels.join("\u0000");
 
                   const isAuthenticated = providerStatus?.authStatus === "authenticated";
                   const isAvailable = providerStatus?.available === true;
@@ -955,302 +898,435 @@ function SettingsRouteView() {
                   const isRefreshPending =
                     refreshProviderStatusMutation.isPending &&
                     refreshProviderStatusMutation.variables === providerSettings.provider;
+                  const showProviderAlert = shouldShowProviderAlert(providerStatus);
                   return (
-                    <div
+                    <Collapsible
                       key={providerSettings.provider}
-                      className={cn(
-                        "flex items-start gap-3 px-4 py-3 sm:px-5",
-                        isDisabled && "bg-warning/6",
-                      )}
+                      open={isOpen}
+                      onOpenChange={(open) =>
+                        setOpenProviderPanels((existing) => ({
+                          ...existing,
+                          [providerSettings.provider]: open,
+                        }))
+                      }
                     >
-                      {/* Status dot */}
-                      <span
+                      <div
                         className={cn(
-                          "size-2 shrink-0 self-center rounded-full",
-                          isDisabled
-                            ? "bg-warning"
-                            : providerStatus
-                              ? providerStatusDotClass(providerStatus.status)
-                              : "bg-muted-foreground/40",
+                          "relative overflow-hidden rounded-2xl border bg-card not-dark:bg-clip-padding text-card-foreground shadow-xs/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
+                          isDisabled && "bg-warning/6",
                         )}
-                        title={
-                          isDisabled
-                            ? "Disabled"
-                            : providerStatus
-                              ? providerStatusLabel(providerStatus)
-                              : "Unknown"
-                        }
-                      />
-
-                      {/* Provider info */}
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-baseline gap-2">
+                      >
+                        <button
+                          type="button"
+                          className="flex w-full items-center gap-3 px-4 py-4 text-left sm:px-5"
+                          onClick={() =>
+                            setOpenProviderPanels((existing) => ({
+                              ...existing,
+                              [providerSettings.provider]: !existing[providerSettings.provider],
+                            }))
+                          }
+                        >
                           <span
                             className={cn(
-                              "text-sm font-medium text-foreground",
-                              isDisabled && "text-warning-foreground",
+                              "size-2 shrink-0 rounded-full",
+                              isDisabled
+                                ? "bg-warning"
+                                : providerStatus
+                                  ? providerStatusDotClass(providerStatus.status)
+                                  : "bg-muted-foreground/40",
                             )}
-                          >
-                            {providerSettings.title}
-                          </span>
-                          {providerStatus?.plan ? (
-                            <span
+                          ></span>
+                          <div className="min-w-0 flex-1">
+                            <div className="flex flex-wrap items-baseline gap-2">
+                              <span
+                                className={cn(
+                                  "text-sm font-medium text-foreground",
+                                  isDisabled && "text-warning-foreground",
+                                )}
+                              >
+                                {providerSettings.title}
+                              </span>
+                              {customModels.length > 0 ? (
+                                <span className="text-[11px] text-muted-foreground">
+                                  {customModels.length} custom model
+                                  {customModels.length === 1 ? "" : "s"}
+                                </span>
+                              ) : null}
+                            </div>
+                            <p
                               className={cn(
-                                "rounded-full border border-border/70 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-[0.08em] text-muted-foreground",
-                                isDisabled && "border-warning/40 text-warning-foreground/80",
+                                "mt-1 text-xs text-muted-foreground",
+                                isDisabled && "text-warning-foreground/85",
                               )}
                             >
-                              {providerStatus.plan}
-                            </span>
-                          ) : null}
-                          {providerStatus?.version ? (
-                            <span
-                              className={cn(
-                                "text-[11px] text-muted-foreground",
-                                isDisabled && "text-warning-foreground/75",
-                              )}
-                            >
-                              v{providerStatus.version}
-                            </span>
-                          ) : null}
-                        </div>
-                        <p
-                          className={cn(
-                            "text-xs text-muted-foreground",
-                            isDisabled && "text-warning-foreground/85",
-                          )}
-                        >
-                          {isDisabled ? "Disabled" : providerStatusSummary(providerStatus)}
-                          {providerStatus?.message && providerStatus.status !== "ready" ? (
-                            <> &mdash; {providerStatus.message}</>
-                          ) : null}
-                        </p>
-                      </div>
-
-                      <div className="flex shrink-0 items-center self-center">
-                        {/* Enable/disable toggle */}
-                        <div className="flex w-10 justify-center">
-                          <Switch
-                            checked={enabled}
-                            onCheckedChange={(checked) =>
-                              updateSettings(
-                                patchProviderEnabled(
-                                  settings,
-                                  providerSettings.provider,
-                                  Boolean(checked),
-                                ),
-                              )
-                            }
-                            aria-label={`${providerSettings.title} enabled`}
+                              {isDisabled ? "Disabled" : providerStatusSummary(providerStatus)}
+                              {providerStatus?.message &&
+                              providerStatus.status !== "ready" &&
+                              providerStatus.authStatus !== "unauthenticated" ? (
+                                <> - {providerStatus.message}</>
+                              ) : null}
+                            </p>
+                          </div>
+                          <ChevronDownIcon
+                            className={cn(
+                              "size-4 shrink-0 self-center text-muted-foreground transition-transform",
+                              isOpen && "rotate-180",
+                            )}
                           />
-                        </div>
+                        </button>
 
-                        {/* Actions menu */}
-                        <div className="flex w-10 justify-center">
-                          <Menu>
-                            <MenuTrigger
-                              render={
-                                <Button
-                                  size="icon-xs"
-                                  variant="ghost"
-                                  className="text-muted-foreground"
-                                  aria-label={`${providerSettings.title} actions`}
-                                />
-                              }
+                        <CollapsibleContent>
+                          {showProviderAlert ? (
+                            <div
+                              className={cn(
+                                "flex items-start gap-2.5 border-t px-4 py-3 sm:px-5",
+                                !isAvailable
+                                  ? "border-destructive/30 bg-destructive/8 text-destructive"
+                                  : "border-amber-500/30 bg-amber-500/8 text-amber-600 dark:text-amber-400",
+                              )}
                             >
-                              <EllipsisVerticalIcon className="size-3.5" />
-                            </MenuTrigger>
-                            <MenuPopup align="end">
-                              <MenuItem
+                              <AlertTriangleIcon className="mt-0.5 size-4 shrink-0" />
+                              <div className="min-w-0 flex-1">
+                                <p className="text-xs font-medium">
+                                  {providerAlertTitle(providerStatus)}
+                                </p>
+                                <p className="mt-0.5 text-xs opacity-80">
+                                  {providerAlertDescription(providerSettings.title, providerStatus)}
+                                </p>
+                              </div>
+                            </div>
+                          ) : (
+                            <div className="border-t border-border" />
+                          )}
+                          <SettingsRow
+                            title="Refresh"
+                            description="Re-detect CLI availability, version, and auth status."
+                            control={
+                              <Button
+                                size="xs"
+                                variant="outline"
                                 disabled={isRefreshPending}
                                 onClick={() =>
                                   refreshProviderStatusMutation.mutate(providerSettings.provider)
                                 }
                               >
-                                <RefreshCwIcon className="mr-2 size-3.5" />
-                                {isRefreshPending ? "Refreshing..." : "Refresh"}
-                              </MenuItem>
-                              {isAvailable && !isAuthenticated ? (
-                                <MenuItem
-                                  disabled={isAuthActionPending}
-                                  onClick={() =>
-                                    providerLoginMutation.mutate(providerSettings.provider)
-                                  }
+                                <RefreshCwIcon
+                                  className={cn("size-3.5", isRefreshPending && "animate-spin")}
+                                />
+                                {isRefreshPending ? "Refreshing…" : "Refresh status"}
+                              </Button>
+                            }
+                          />
+
+                          <SettingsRow
+                            title="Enabled"
+                            description="Disable this provider to hide it from session creation and model pickers."
+                            control={
+                              <Switch
+                                checked={enabled}
+                                onCheckedChange={(checked) =>
+                                  updateSettings(
+                                    patchProviderEnabled(
+                                      settings,
+                                      providerSettings.provider,
+                                      Boolean(checked),
+                                    ),
+                                  )
+                                }
+                                aria-label={`${providerSettings.title} enabled`}
+                              />
+                            }
+                          />
+
+                          <SettingsRow
+                            title="Auth status"
+                            description={providerAuthDescription(providerStatus)}
+                            status={
+                              isAuthenticated && providerStatus?.plan ? (
+                                <>
+                                  Plan:{" "}
+                                  <span className="font-medium text-foreground">
+                                    {providerStatus.plan}
+                                  </span>
+                                </>
+                              ) : null
+                            }
+                            control={
+                              <div className="flex items-center gap-2">
+                                {providerStatus?.authStatus === "unauthenticated" ? (
+                                  <Button
+                                    size="xs"
+                                    variant="default"
+                                    disabled={isAuthActionPending}
+                                    onClick={() =>
+                                      providerLoginMutation.mutate(providerSettings.provider)
+                                    }
+                                  >
+                                    <LogInIcon className="size-3.5" />
+                                    {isAuthActionPending ? "Logging in…" : "Log in"}
+                                  </Button>
+                                ) : null}
+                                {providerStatus?.authStatus === "authenticated" ? (
+                                  <Button
+                                    size="xs"
+                                    variant="ghost"
+                                    disabled={isAuthActionPending}
+                                    onClick={() =>
+                                      providerLogoutMutation.mutate(providerSettings.provider)
+                                    }
+                                    className="text-muted-foreground hover:text-destructive"
+                                  >
+                                    <LogOutIcon className="size-3.5" />
+                                    {isAuthActionPending ? "Logging out…" : "Log out"}
+                                  </Button>
+                                ) : null}
+                              </div>
+                            }
+                          />
+
+                          <SettingsRow
+                            title="Custom models"
+                            description={providerSettings.description}
+                            resetAction={
+                              areCustomModelsDirty ? (
+                                <SettingResetButton
+                                  label={`${providerSettings.title} custom models`}
+                                  onClick={() => {
+                                    updateSettings(
+                                      patchCustomModels(providerSettings.provider, [
+                                        ...getCustomModelsForProvider(
+                                          defaults,
+                                          providerSettings.provider,
+                                        ),
+                                      ]),
+                                    );
+                                    setCustomModelErrorByProvider((existing) => ({
+                                      ...existing,
+                                      [providerSettings.provider]: null,
+                                    }));
+                                    setShowAllCustomModelsByProvider((existing) => ({
+                                      ...existing,
+                                      [providerSettings.provider]: false,
+                                    }));
+                                  }}
+                                />
+                              ) : null
+                            }
+                          >
+                            <div className="mt-3 space-y-3">
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                                <Input
+                                  id={`custom-model-slug-${providerSettings.provider}`}
+                                  value={customModelInput}
+                                  onChange={(event) => {
+                                    const value = event.target.value;
+                                    setCustomModelInputByProvider((existing) => ({
+                                      ...existing,
+                                      [providerSettings.provider]: value,
+                                    }));
+                                    if (customModelError) {
+                                      setCustomModelErrorByProvider((existing) => ({
+                                        ...existing,
+                                        [providerSettings.provider]: null,
+                                      }));
+                                    }
+                                  }}
+                                  onKeyDown={(event) => {
+                                    if (event.key !== "Enter") return;
+                                    event.preventDefault();
+                                    addCustomModel(providerSettings.provider);
+                                  }}
+                                  placeholder={providerSettings.example}
+                                  spellCheck={false}
+                                />
+                                <Button
+                                  className="shrink-0"
+                                  variant="outline"
+                                  onClick={() => addCustomModel(providerSettings.provider)}
                                 >
-                                  <LogInIcon className="mr-2 size-3.5" />
-                                  {isAuthActionPending ? "Logging in..." : "Log in"}
-                                </MenuItem>
+                                  <PlusIcon className="size-3.5" />
+                                  Add model
+                                </Button>
+                              </div>
+
+                              {customModelError ? (
+                                <p className="text-xs text-destructive">{customModelError}</p>
                               ) : null}
-                              {isAvailable && isAuthenticated ? (
-                                <MenuItem
-                                  disabled={isAuthActionPending}
+
+                              {customModels.length > 0 ? (
+                                <div>
+                                  <div className="overflow-hidden border border-border/70">
+                                    {visibleCustomModels.map((slug) => (
+                                      <div
+                                        key={`${providerSettings.provider}:${slug}`}
+                                        className="group flex items-center gap-3 border-t border-border/60 px-4 py-2 first:border-t-0"
+                                      >
+                                        <code className="min-w-0 flex-1 truncate text-sm text-foreground">
+                                          {slug}
+                                        </code>
+                                        <button
+                                          type="button"
+                                          className="shrink-0 opacity-0 transition-opacity group-hover:opacity-100 hover:opacity-100"
+                                          aria-label={`Remove ${slug}`}
+                                          onClick={() =>
+                                            removeCustomModel(providerSettings.provider, slug)
+                                          }
+                                        >
+                                          <XIcon className="size-3.5 text-muted-foreground hover:text-foreground" />
+                                        </button>
+                                      </div>
+                                    ))}
+                                  </div>
+
+                                  {customModels.length > 5 ? (
+                                    <button
+                                      type="button"
+                                      className="mt-2 text-xs text-muted-foreground transition-colors hover:text-foreground"
+                                      onClick={() =>
+                                        setShowAllCustomModelsByProvider((existing) => ({
+                                          ...existing,
+                                          [providerSettings.provider]:
+                                            !existing[providerSettings.provider],
+                                        }))
+                                      }
+                                    >
+                                      {showAllCustomModels
+                                        ? "Show less"
+                                        : `Show more (${customModels.length - 5})`}
+                                    </button>
+                                  ) : null}
+                                </div>
+                              ) : null}
+                            </div>
+                          </SettingsRow>
+
+                          <SettingsRow
+                            title="CLI on PATH"
+                            description={
+                              providerStatus == null
+                                ? "Use Refresh to check whether the default CLI is available on your PATH."
+                                : isCliDetected
+                                  ? "The default CLI was detected on your PATH."
+                                  : binaryPathValue.trim().length > 0
+                                    ? "The default CLI was not found on your PATH. New sessions can still use the binary path override below."
+                                    : (providerStatus.message ?? "Not found on your PATH.")
+                            }
+                            control={
+                              <div className="flex items-center gap-2">
+                                <span
+                                  className={cn(
+                                    "size-1.5 shrink-0 rounded-full",
+                                    providerStatus == null
+                                      ? "bg-muted-foreground/40"
+                                      : isCliDetected
+                                        ? "bg-emerald-500"
+                                        : "bg-destructive",
+                                  )}
+                                />
+                                <code className="text-xs font-medium text-muted-foreground">
+                                  {providerStatus == null
+                                    ? "Unknown"
+                                    : isCliDetected
+                                      ? "Yes"
+                                      : binaryPathValue.trim().length > 0
+                                        ? "No (override set)"
+                                        : "No"}
+                                </code>
+                              </div>
+                            }
+                          />
+
+                          {isCliDetected && providerStatus?.version ? (
+                            <SettingsRow
+                              title="CLI version"
+                              description="Version reported by the provider CLI."
+                              control={
+                                <code className="text-xs font-medium text-muted-foreground">
+                                  {providerStatus.version}
+                                </code>
+                              }
+                            />
+                          ) : null}
+
+                          <SettingsRow
+                            title="Binary path override"
+                            description={installProviderSettings.binaryDescription}
+                            resetAction={
+                              isInstallOverrideDirty ? (
+                                <SettingResetButton
+                                  label={`${providerSettings.title} install override`}
                                   onClick={() =>
-                                    providerLogoutMutation.mutate(providerSettings.provider)
+                                    updateSettings({
+                                      claudeBinaryPath:
+                                        providerSettings.provider === "claudeAgent"
+                                          ? defaults.claudeBinaryPath
+                                          : settings.claudeBinaryPath,
+                                      codexBinaryPath:
+                                        providerSettings.provider === "codex"
+                                          ? defaults.codexBinaryPath
+                                          : settings.codexBinaryPath,
+                                      codexHomePath:
+                                        providerSettings.provider === "codex"
+                                          ? defaults.codexHomePath
+                                          : settings.codexHomePath,
+                                    })
                                   }
-                                >
-                                  <LogOutIcon className="mr-2 size-3.5" />
-                                  {isAuthActionPending ? "Logging out..." : "Log out"}
-                                </MenuItem>
-                              ) : null}
-                              {!isAvailable ? <MenuItem disabled>CLI not detected</MenuItem> : null}
-                            </MenuPopup>
-                          </Menu>
-                        </div>
+                                />
+                              ) : null
+                            }
+                          >
+                            <Input
+                              id={`provider-install-${installProviderSettings.binaryPathKey}`}
+                              className="mt-2"
+                              value={binaryPathValue}
+                              onChange={(event) =>
+                                updateSettings(
+                                  installProviderSettings.binaryPathKey === "claudeBinaryPath"
+                                    ? { claudeBinaryPath: event.target.value }
+                                    : { codexBinaryPath: event.target.value },
+                                )
+                              }
+                              placeholder={installProviderSettings.binaryPlaceholder}
+                              spellCheck={false}
+                            />
+                          </SettingsRow>
+
+                          {installProviderSettings.homePathKey ? (
+                            <SettingsRow
+                              title="CODEX_HOME path"
+                              description={
+                                installProviderSettings.homeDescription ??
+                                "Override the default CODEX_HOME directory."
+                              }
+                            >
+                              <Input
+                                id={`provider-install-${installProviderSettings.homePathKey}`}
+                                className="mt-2"
+                                value={codexHomePath}
+                                onChange={(event) =>
+                                  updateSettings({
+                                    codexHomePath: event.target.value,
+                                  })
+                                }
+                                placeholder={installProviderSettings.homePlaceholder}
+                                spellCheck={false}
+                              />
+                            </SettingsRow>
+                          ) : null}
+                        </CollapsibleContent>
                       </div>
-                    </div>
+                    </Collapsible>
                   );
                 })}
-
                 {refreshProviderStatusesError ? (
-                  <div className="flex items-center justify-end gap-2 px-4 py-2.5 sm:px-5">
-                    <p className="mr-auto text-xs text-destructive">
-                      {refreshProviderStatusesError}
-                    </p>
+                  <div className="px-1">
+                    <p className="text-xs text-destructive">{refreshProviderStatusesError}</p>
                   </div>
                 ) : null}
               </div>
-            </SettingsSection>
+            </section>
 
             <SettingsSection title="Advanced">
-              <SettingsRow
-                title="Provider installs"
-                description="Override the CLI used for new sessions."
-                resetAction={
-                  isInstallSettingsDirty ? (
-                    <SettingResetButton
-                      label="provider installs"
-                      onClick={() => {
-                        updateSettings({
-                          claudeBinaryPath: defaults.claudeBinaryPath,
-                          codexBinaryPath: defaults.codexBinaryPath,
-                          codexHomePath: defaults.codexHomePath,
-                        });
-                        setOpenInstallProviders({
-                          codex: false,
-                          claudeAgent: false,
-                        });
-                      }}
-                    />
-                  ) : null
-                }
-              >
-                <div className="mt-4">
-                  <div className="space-y-2">
-                    {INSTALL_PROVIDER_SETTINGS.map((providerSettings) => {
-                      const isOpen = openInstallProviders[providerSettings.provider];
-                      const isDirty =
-                        providerSettings.provider === "codex"
-                          ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
-                            settings.codexHomePath !== defaults.codexHomePath
-                          : settings.claudeBinaryPath !== defaults.claudeBinaryPath;
-                      const binaryPathValue =
-                        providerSettings.binaryPathKey === "claudeBinaryPath"
-                          ? claudeBinaryPath
-                          : codexBinaryPath;
-
-                      return (
-                        <Collapsible
-                          key={providerSettings.provider}
-                          open={isOpen}
-                          onOpenChange={(open) =>
-                            setOpenInstallProviders((existing) => ({
-                              ...existing,
-                              [providerSettings.provider]: open,
-                            }))
-                          }
-                        >
-                          <div className="overflow-hidden rounded-xl border border-border/70">
-                            <button
-                              type="button"
-                              className="flex w-full items-center gap-3 px-4 py-3 text-left"
-                              onClick={() =>
-                                setOpenInstallProviders((existing) => ({
-                                  ...existing,
-                                  [providerSettings.provider]: !existing[providerSettings.provider],
-                                }))
-                              }
-                            >
-                              <span className="min-w-0 flex-1 text-sm font-medium text-foreground">
-                                {providerSettings.title}
-                              </span>
-                              {isDirty ? (
-                                <span className="text-[11px] text-muted-foreground">Custom</span>
-                              ) : null}
-                              <ChevronDownIcon
-                                className={cn(
-                                  "size-4 shrink-0 text-muted-foreground transition-transform",
-                                  isOpen && "rotate-180",
-                                )}
-                              />
-                            </button>
-
-                            <CollapsibleContent>
-                              <div className="border-t border-border/70 px-4 py-4">
-                                <div className="space-y-3">
-                                  <label
-                                    htmlFor={`provider-install-${providerSettings.binaryPathKey}`}
-                                    className="block"
-                                  >
-                                    <span className="block text-xs font-medium text-foreground">
-                                      {providerSettings.title} binary path
-                                    </span>
-                                    <Input
-                                      id={`provider-install-${providerSettings.binaryPathKey}`}
-                                      className="mt-1"
-                                      value={binaryPathValue}
-                                      onChange={(event) =>
-                                        updateSettings(
-                                          providerSettings.binaryPathKey === "claudeBinaryPath"
-                                            ? { claudeBinaryPath: event.target.value }
-                                            : { codexBinaryPath: event.target.value },
-                                        )
-                                      }
-                                      placeholder={providerSettings.binaryPlaceholder}
-                                      spellCheck={false}
-                                    />
-                                    <span className="mt-1 block text-xs text-muted-foreground">
-                                      {providerSettings.binaryDescription}
-                                    </span>
-                                  </label>
-
-                                  {providerSettings.homePathKey ? (
-                                    <label
-                                      htmlFor={`provider-install-${providerSettings.homePathKey}`}
-                                      className="block"
-                                    >
-                                      <span className="block text-xs font-medium text-foreground">
-                                        CODEX_HOME path
-                                      </span>
-                                      <Input
-                                        id={`provider-install-${providerSettings.homePathKey}`}
-                                        className="mt-1"
-                                        value={codexHomePath}
-                                        onChange={(event) =>
-                                          updateSettings({
-                                            codexHomePath: event.target.value,
-                                          })
-                                        }
-                                        placeholder={providerSettings.homePlaceholder}
-                                        spellCheck={false}
-                                      />
-                                      {providerSettings.homeDescription ? (
-                                        <span className="mt-1 block text-xs text-muted-foreground">
-                                          {providerSettings.homeDescription}
-                                        </span>
-                                      ) : null}
-                                    </label>
-                                  ) : null}
-                                </div>
-                              </div>
-                            </CollapsibleContent>
-                          </div>
-                        </Collapsible>
-                      );
-                    })}
-                  </div>
-                </div>
-              </SettingsRow>
-
               <SettingsRow
                 title="Keybindings"
                 description="Open the persisted `keybindings.json` file to edit advanced bindings directly."
