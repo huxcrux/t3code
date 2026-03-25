@@ -77,14 +77,6 @@ export function isProviderEnabled(
   return settings.enabledProviders[provider] ?? true;
 }
 
-export function getEnabledProviderOptions(
-  settings: Pick<AppSettings, "enabledProviders">,
-): ProviderKind[] {
-  return (Object.entries(settings.enabledProviders) as Array<[ProviderKind, boolean]>)
-    .filter(([, enabled]) => enabled)
-    .map(([provider]) => provider);
-}
-
 export function patchProviderEnabled(
   settings: Pick<AppSettings, "enabledProviders">,
   provider: ProviderKind,

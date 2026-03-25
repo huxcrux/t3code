@@ -6,7 +6,6 @@ import {
   DEFAULT_SIDEBAR_PROJECT_SORT_ORDER,
   DEFAULT_SIDEBAR_THREAD_SORT_ORDER,
   DEFAULT_TIMESTAMP_FORMAT,
-  getEnabledProviderOptions,
   getProviderStartOptions,
   isProviderEnabled,
   patchProviderEnabled,
@@ -271,7 +270,6 @@ describe("provider enablement", () => {
 
     expect(isProviderEnabled(settings, "codex")).toBe(true);
     expect(isProviderEnabled(settings, "claudeAgent")).toBe(false);
-    expect(getEnabledProviderOptions(settings)).toEqual(["codex"]);
   });
 
   it("patches provider enabled state without resetting other providers", () => {
