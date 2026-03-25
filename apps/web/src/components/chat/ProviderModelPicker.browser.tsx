@@ -1,4 +1,4 @@
-import { type ModelSlug, type ProviderKind } from "@t3tools/contracts";
+import { type ModelSlug, type ProviderKind, type ServerProviderStatus } from "@t3tools/contracts";
 import { page } from "vitest/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { render } from "vitest-browser-react";
@@ -26,6 +26,7 @@ async function mountPicker(props: {
   provider: ProviderKind;
   model: ModelSlug;
   lockedProvider: ProviderKind | null;
+  providerStatuses?: ReadonlyArray<ServerProviderStatus>;
   triggerVariant?: "ghost" | "outline";
 }) {
   const host = document.createElement("div");
@@ -37,6 +38,7 @@ async function mountPicker(props: {
       model={props.model}
       lockedProvider={props.lockedProvider}
       enabledProviders={ENABLED_PROVIDERS}
+      {...(props.providerStatuses ? { providerStatuses: props.providerStatuses } : {})}
       modelOptionsByProvider={MODEL_OPTIONS_BY_PROVIDER}
       triggerVariant={props.triggerVariant}
       onProviderModelChange={onProviderModelChange}
@@ -160,6 +162,43 @@ describe("ProviderModelPicker", () => {
         "claudeAgent",
         "claude-sonnet-4-6",
       );
+    } finally {
+      await mounted.cleanup();
+    }
+  });
+
+  it("shows unusable providers as disabled when provider statuses are supplied", async () => {
+    const mounted = await mountPicker({
+      provider: "claudeAgent",
+      model: "claude-opus-4-6",
+      lockedProvider: null,
+      providerStatuses: [
+        {
+          provider: "claudeAgent",
+          status: "ready",
+          available: true,
+          authStatus: "authenticated",
+          checkedAt: "2026-03-25T12:00:00.000Z",
+        },
+        {
+          provider: "codex",
+          status: "error",
+          available: false,
+          authStatus: "unknown",
+          checkedAt: "2026-03-25T12:00:00.000Z",
+        },
+      ],
+    });
+
+    try {
+      await page.getByRole("button").click();
+
+      await vi.waitFor(() => {
+        const text = document.body.textContent ?? "";
+        expect(text).toContain("Codex");
+        expect(text).toContain("Not found");
+        expect(text).not.toContain("GPT-5 Codex");
+      });
     } finally {
       await mounted.cleanup();
     }

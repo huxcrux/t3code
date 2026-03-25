@@ -836,6 +836,7 @@ function SettingsRouteView() {
                       model={textGenModel}
                       lockedProvider={null}
                       enabledProviders={settings.enabledProviders}
+                      providerStatuses={providerStatuses}
                       modelOptionsByProvider={gitModelOptionsByProvider}
                       triggerVariant="outline"
                       triggerClassName="min-w-0 max-w-none shrink-0 text-foreground/90 hover:text-foreground"
@@ -938,12 +939,7 @@ function SettingsRouteView() {
                         }))
                       }
                     >
-                      <div
-                        className={cn(
-                          "relative overflow-hidden rounded-2xl border bg-card not-dark:bg-clip-padding text-card-foreground shadow-xs/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]",
-                          isDisabled && "bg-warning/6",
-                        )}
-                      >
+                      <div className="relative overflow-hidden rounded-2xl border bg-card not-dark:bg-clip-padding text-card-foreground shadow-xs/5 before:pointer-events-none before:absolute before:inset-0 before:rounded-[calc(var(--radius-2xl)-1px)] before:shadow-[0_1px_--theme(--color-black/4%)] dark:before:shadow-[0_-1px_--theme(--color-white/6%)]">
                         <button
                           type="button"
                           className="flex w-full items-center gap-3 px-4 py-4 text-left sm:px-5"
@@ -966,12 +962,7 @@ function SettingsRouteView() {
                           ></span>
                           <div className="min-w-0 flex-1">
                             <div className="flex flex-wrap items-baseline gap-2">
-                              <span
-                                className={cn(
-                                  "text-sm font-medium text-foreground",
-                                  isDisabled && "text-warning-foreground",
-                                )}
-                              >
+                              <span className="text-sm font-medium text-foreground">
                                 {providerSettings.title}
                               </span>
                               {customModels.length > 0 ? (
@@ -981,12 +972,7 @@ function SettingsRouteView() {
                                 </span>
                               ) : null}
                             </div>
-                            <p
-                              className={cn(
-                                "mt-1 text-xs text-muted-foreground",
-                                isDisabled && "text-warning-foreground/85",
-                              )}
-                            >
+                            <p className="mt-1 text-xs text-muted-foreground">
                               {isDisabled ? "Disabled" : providerStatusSummary(providerStatus)}
                               {providerStatus?.message &&
                               providerStatus.status !== "ready" &&
