@@ -246,10 +246,13 @@ export function readCodexAccountPlanViaAppServer(
       Effect.flatMap(() => Ref.get(planRef)),
     );
 
-    return yield* Effect.raceFirst(
-      Stream.run(Stream.fromIterable(messages), child.stdin).pipe(Effect.flatMap(() => readPlan)),
-      Stream.runDrain(child.stderr).pipe(Effect.flatMap(() => Effect.never)),
-    ).pipe(Effect.ensuring(child.kill().pipe(Effect.ignore)));
+    return yield* Effect.gen(function* () {
+      yield* Effect.forkScoped(Stream.runDrain(child.stderr).pipe(Effect.ignore));
+      yield* Effect.forkScoped(
+        Stream.run(Stream.fromIterable(messages), child.stdin).pipe(Effect.ignore),
+      );
+      return yield* readPlan;
+    }).pipe(Effect.ensuring(child.kill().pipe(Effect.ignore)));
   });
 
   return program.pipe(

@@ -93,6 +93,27 @@ describe("readCodexAccountPlanViaAppServer", () => {
     await expect(Effect.runPromise(effect)).resolves.toBeUndefined();
   });
 
+  it("reads stdout even when stdin never completes", async () => {
+    const effect = readCodexAccountPlanViaAppServer().pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            mockHandle({
+              stdin: Sink.never as ChildProcessSpawner.ChildProcessHandle["stdin"],
+              stdout: [
+                '{"id":1,"result":{}}\n',
+                '{"id":2,"result":{"account":{"type":"chatgpt","planType":"team"}}}\n',
+              ],
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await expect(Effect.runPromise(effect)).resolves.toBe("team");
+  });
+
   it("returns undefined when initialize responds with a string error", async () => {
     const effect = readCodexAccountPlanViaAppServer().pipe(
       Effect.provideService(

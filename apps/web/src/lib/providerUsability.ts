@@ -7,9 +7,11 @@ function providerDisplayName(provider: ProviderKind): string {
     case "claudeAgent":
       return "Claude";
     case "codex":
-    default:
       return "Codex";
   }
+
+  const _exhaustiveCheck: never = provider;
+  return _exhaustiveCheck;
 }
 
 export function getProviderUsabilityState(
