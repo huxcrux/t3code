@@ -177,6 +177,7 @@ export function readCodexAccountPlanViaAppServer(
           clearTimeout(timeout);
           output.close();
           signal.removeEventListener("abort", handleAbort);
+          child.stdin.off("error", fail);
         };
 
         const finish = (plan: string | undefined) => {
@@ -209,6 +210,7 @@ export function readCodexAccountPlanViaAppServer(
 
         signal.addEventListener("abort", handleAbort, { once: true });
         child.once("error", fail);
+        child.stdin.once("error", fail);
         // Wait for `close`, not `exit`, so stdout has a chance to flush.
         // The app-server can terminate quickly after writing the response,
         // and resolving on `exit` can race the readline consumer.

@@ -1,11 +1,12 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert } from "@effect/vitest";
-import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
+import { Deferred, Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
 import { vi } from "vitest";
 
 import {
+  ProviderHealthLive,
   checkClaudeProviderStatus,
   checkCodexProviderStatus,
   hasCustomModelProvider,
@@ -24,6 +25,24 @@ function mockHandle(result: { stdout: string; stderr: string; code: number }) {
     pid: ChildProcessSpawner.ProcessId(1),
     exitCode: Effect.succeed(ChildProcessSpawner.ExitCode(result.code)),
     isRunning: Effect.succeed(false),
+    kill: () => Effect.void,
+    stdin: Sink.drain,
+    stdout: Stream.make(encoder.encode(result.stdout)),
+    stderr: Stream.make(encoder.encode(result.stderr)),
+    all: Stream.empty,
+    getInputFd: () => Sink.drain,
+    getOutputFd: () => Stream.empty,
+  });
+}
+
+function blockingHandle(
+  result: { stdout: string; stderr: string; code: number },
+  release: Deferred.Deferred<void>,
+) {
+  return ChildProcessSpawner.makeHandle({
+    pid: ChildProcessSpawner.ProcessId(1),
+    exitCode: Deferred.await(release).pipe(Effect.as(ChildProcessSpawner.ExitCode(result.code))),
+    isRunning: Effect.succeed(true),
     kill: () => Effect.void,
     stdin: Sink.drain,
     stdout: Stream.make(encoder.encode(result.stdout)),
@@ -104,6 +123,35 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
   // path being tested.
 
   describe("checkCodexProviderStatus", () => {
+    it.effect("does not block layer startup on the initial provider checks", () =>
+      Effect.scoped(
+        Effect.gen(function* () {
+          const release = yield* Deferred.make<void>();
+          const spawned = yield* Deferred.make<void>();
+
+          const blockingSpawnerLayer = Layer.succeed(
+            ChildProcessSpawner.ChildProcessSpawner,
+            ChildProcessSpawner.make(() =>
+              Deferred.succeed(spawned, undefined).pipe(
+                Effect.ignore,
+                Effect.as(blockingHandle({ stdout: "", stderr: "", code: 0 }, release)),
+              ),
+            ),
+          );
+
+          const buildFiber = yield* Layer.build(
+            ProviderHealthLive.pipe(Layer.provide(blockingSpawnerLayer)),
+          ).pipe(Effect.forkScoped);
+
+          yield* Deferred.await(spawned);
+          yield* Effect.yieldNow;
+
+          const layerExit = yield* Effect.sync(() => buildFiber.pollUnsafe());
+          assert.notStrictEqual(layerExit, undefined);
+        }),
+      ),
+    );
+
     it.effect("returns ready when codex is installed and authenticated", () =>
       Effect.gen(function* () {
         // Point CODEX_HOME at an empty tmp dir (no config.toml) so the

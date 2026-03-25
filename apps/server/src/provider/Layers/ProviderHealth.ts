@@ -15,7 +15,7 @@ import type {
   ServerProviderStatus,
   ServerProviderStatusState,
 } from "@t3tools/contracts";
-import { Effect, FileSystem, Layer, Option, Path, Ref, Result, Stream } from "effect";
+import { Effect, Fiber, FileSystem, Layer, Option, Path, Ref, Result, Stream } from "effect";
 import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 
 import type { ProviderKind } from "@t3tools/contracts";
@@ -686,8 +686,23 @@ export const ProviderHealthLive = Layer.effect(
       providerOptions !== undefined
         ? Ref.set(configuredProviderOptionsRef, providerOptions)
         : Effect.void;
-    const initialStatuses: ReadonlyArray<ServerProviderStatus> = yield* runProviderChecks();
-    const statusesRef = yield* Ref.make<ReadonlyArray<ServerProviderStatus>>(initialStatuses);
+    const initialStatusesFiber = yield* Effect.forkScoped(runProviderChecks());
+    const statusesRef = yield* Ref.make<ReadonlyArray<ServerProviderStatus> | undefined>(undefined);
+    const getStatuses = Effect.gen(function* () {
+      const cachedStatuses = yield* Ref.get(statusesRef);
+      if (cachedStatuses !== undefined) {
+        return cachedStatuses;
+      }
+
+      const initialStatuses: ReadonlyArray<ServerProviderStatus> =
+        yield* Fiber.join(initialStatusesFiber);
+      return yield* Ref.modify(statusesRef, (currentStatuses) => {
+        if (currentStatuses !== undefined) {
+          return [currentStatuses, currentStatuses] as const;
+        }
+        return [initialStatuses, initialStatuses] as const;
+      });
+    });
 
     const refreshAndStore = (providerOptions?: ProviderStartOptions) =>
       Effect.gen(function* () {
@@ -704,13 +719,14 @@ export const ProviderHealthLive = Layer.effect(
       Effect.gen(function* () {
         yield* setProviderOptions(providerOptions);
         const effectiveProviderOptions = yield* resolveProviderOptions(providerOptions);
+        const baseStatuses = yield* getStatuses;
         const nextStatus = yield* providerCheck(provider, effectiveProviderOptions).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
           Effect.provideService(Path.Path, path),
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
         );
         return yield* Ref.modify(statusesRef, (currentStatuses) => {
-          const providers = currentStatuses.map((status) =>
+          const providers = (currentStatuses ?? baseStatuses).map((status) =>
             status.provider === provider ? nextStatus : status,
           );
           return [providers, providers] as const;
@@ -769,7 +785,7 @@ export const ProviderHealthLive = Layer.effect(
       });
 
     return {
-      getStatuses: Ref.get(statusesRef),
+      getStatuses,
       refreshStatuses: refreshAndStore,
       refreshStatus: refreshStatusAndStore,
       login: (provider: ProviderKind, providerOptions?: ProviderStartOptions) =>
