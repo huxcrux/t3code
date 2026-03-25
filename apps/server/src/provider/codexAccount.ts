@@ -136,7 +136,7 @@ export function readCodexAccountSnapshot(response: unknown): CodexAccountSnapsho
     return {
       type: "chatgpt",
       planType,
-      sparkEnabled: planType !== "unknown" && !CODEX_SPARK_DISABLED_PLAN_TYPES.has(planType),
+      sparkEnabled: !CODEX_SPARK_DISABLED_PLAN_TYPES.has(planType),
     };
   }
 

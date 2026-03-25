@@ -308,7 +308,7 @@ describe("readCodexAccountSnapshot", () => {
     ).toEqual({
       type: "chatgpt",
       planType: "unknown",
-      sparkEnabled: false,
+      sparkEnabled: true,
     });
   });
 });
