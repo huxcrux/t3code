@@ -714,14 +714,10 @@ export const ProviderHealthLive = Layer.effect(
         Effect.provideService(Path.Path, path),
         Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),
       );
-    const resolveProviderOptions = (providerOptions?: ProviderStartOptions) =>
+    const getEffectiveProviderOptions = (providerOptions?: ProviderStartOptions) =>
       providerOptions !== undefined
-        ? Effect.succeed(providerOptions)
+        ? Ref.set(configuredProviderOptionsRef, providerOptions).pipe(Effect.as(providerOptions))
         : Ref.get(configuredProviderOptionsRef);
-    const setProviderOptions = (providerOptions?: ProviderStartOptions) =>
-      providerOptions !== undefined
-        ? Ref.set(configuredProviderOptionsRef, providerOptions)
-        : Effect.void;
     const initialStatusesFiber = yield* Effect.forkScoped(runProviderChecks());
     const statusesRef = yield* Ref.make<ReadonlyArray<ServerProviderStatus> | undefined>(undefined);
     const getStatuses = Effect.gen(function* () {
@@ -742,8 +738,7 @@ export const ProviderHealthLive = Layer.effect(
 
     const refreshAndStore = (providerOptions?: ProviderStartOptions) =>
       Effect.gen(function* () {
-        yield* setProviderOptions(providerOptions);
-        const effectiveProviderOptions = yield* resolveProviderOptions(providerOptions);
+        const effectiveProviderOptions = yield* getEffectiveProviderOptions(providerOptions);
         const statuses = yield* runProviderChecks(effectiveProviderOptions);
         yield* Ref.set(statusesRef, statuses);
         return statuses;
@@ -753,8 +748,7 @@ export const ProviderHealthLive = Layer.effect(
       providerOptions?: ProviderStartOptions,
     ) =>
       Effect.gen(function* () {
-        yield* setProviderOptions(providerOptions);
-        const effectiveProviderOptions = yield* resolveProviderOptions(providerOptions);
+        const effectiveProviderOptions = yield* getEffectiveProviderOptions(providerOptions);
         const baseStatuses = yield* getStatuses;
         const nextStatus = yield* providerCheck(provider, effectiveProviderOptions).pipe(
           Effect.provideService(FileSystem.FileSystem, fileSystem),
@@ -776,8 +770,7 @@ export const ProviderHealthLive = Layer.effect(
       providerOptions?: ProviderStartOptions,
     ): Effect.Effect<ProviderAuthActionResult> =>
       Effect.gen(function* () {
-        yield* setProviderOptions(providerOptions);
-        const effectiveProviderOptions = yield* resolveProviderOptions(providerOptions);
+        const effectiveProviderOptions = yield* getEffectiveProviderOptions(providerOptions);
         const { run, args } = getConfig(provider);
         const result = yield* run(args, effectiveProviderOptions).pipe(
           Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner),

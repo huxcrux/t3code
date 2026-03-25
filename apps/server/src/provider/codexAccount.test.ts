@@ -10,6 +10,7 @@ const encoder = new TextEncoder();
 function mockHandle(input: {
   readonly stdout?: ReadonlyArray<string>;
   readonly stdin?: ChildProcessSpawner.ChildProcessHandle["stdin"];
+  readonly stderr?: ChildProcessSpawner.ChildProcessHandle["stderr"];
 }) {
   const stdoutChunks = input.stdout?.map((line) => encoder.encode(line)) ?? [];
 
@@ -20,7 +21,7 @@ function mockHandle(input: {
     kill: () => Effect.void,
     stdin: input.stdin ?? Sink.drain,
     stdout: stdoutChunks.length > 0 ? Stream.fromIterable(stdoutChunks) : Stream.empty,
-    stderr: Stream.empty,
+    stderr: input.stderr ?? Stream.empty,
     all: Stream.empty,
     getInputFd: () => Sink.drain,
     getOutputFd: () => Stream.empty,
