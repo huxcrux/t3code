@@ -18,7 +18,14 @@ export function extractAuthBoolean(value: unknown): boolean | undefined {
   if (!value || typeof value !== "object") return undefined;
 
   const record = value as Record<string, unknown>;
-  for (const key of ["authenticated", "isAuthenticated", "loggedIn", "isLoggedIn"] as const) {
+  for (const key of [
+    "authenticated",
+    "isAuthenticated",
+    "loggedIn",
+    "isLoggedIn",
+    "is_authenticated",
+    "logged_in",
+  ] as const) {
     if (typeof record[key] === "boolean") return record[key];
   }
   for (const key of ["auth", "status", "session", "account"] as const) {
@@ -40,11 +47,20 @@ export function extractPlanLabel(value: unknown): string | undefined {
   if (!value || typeof value !== "object") return undefined;
 
   const record = value as Record<string, unknown>;
-  for (const key of ["planType", "subscriptionType", "plan", "subscription"] as const) {
+  for (const key of [
+    "planType",
+    "plan_type",
+    "subscriptionType",
+    "subscription_type",
+    "chatgptPlanType",
+    "chatgpt_plan_type",
+    "plan",
+    "subscription",
+  ] as const) {
     const candidate = nonEmptyTrimmed(typeof record[key] === "string" ? record[key] : undefined);
     if (candidate !== undefined) return candidate;
   }
-  for (const key of ["auth", "status", "session", "account"] as const) {
+  for (const key of ["auth", "status", "session", "account", "user"] as const) {
     const nested = extractPlanLabel(record[key]);
     if (nested !== undefined) return nested;
   }

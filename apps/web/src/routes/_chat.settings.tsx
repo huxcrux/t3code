@@ -11,7 +11,7 @@ import {
   Undo2Icon,
   XIcon,
 } from "lucide-react";
-import { type ReactNode, useCallback, useEffect, useMemo, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   type ProviderKind,
   type ServerConfig,
@@ -298,7 +298,20 @@ function SettingsRouteView() {
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
   const availableEditors = serverConfigQuery.data?.availableEditors;
   const providerStatuses = serverConfigQuery.data?.providers ?? [];
-  const providerStartOptions = useMemo(() => getProviderStartOptions(settings), [settings]);
+  const providerStartOptions = useMemo(
+    () =>
+      getProviderStartOptions({
+        claudeBinaryPath,
+        codexBinaryPath,
+        codexHomePath,
+      }),
+    [claudeBinaryPath, codexBinaryPath, codexHomePath],
+  );
+  const providerRefreshKey = useMemo(
+    () => JSON.stringify(providerStartOptions ?? null),
+    [providerStartOptions],
+  );
+  const lastAutoRefreshKeyRef = useRef<string | null>(null);
 
   const updateProviderStatuses = useCallback(
     (providers: ServerConfig["providers"]) => {
@@ -496,8 +509,10 @@ function SettingsRouteView() {
   );
 
   useEffect(() => {
-    if (!providerStartOptions) return;
     if (serverConfigQuery.data == null) return;
+    if (lastAutoRefreshKeyRef.current === providerRefreshKey) return;
+
+    lastAutoRefreshKeyRef.current = providerRefreshKey;
 
     void ensureNativeApi()
       .server.refreshProviderStatuses({ providerOptions: providerStartOptions })
@@ -509,7 +524,7 @@ function SettingsRouteView() {
           error instanceof Error ? error.message : "Unable to refresh provider statuses.",
         );
       });
-  }, [providerStartOptions, serverConfigQuery.data, updateProviderStatuses]);
+  }, [providerRefreshKey, providerStartOptions, serverConfigQuery.data, updateProviderStatuses]);
 
   async function restoreDefaults() {
     if (changedSettingLabels.length === 0) return;

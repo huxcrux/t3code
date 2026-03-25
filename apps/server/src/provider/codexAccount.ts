@@ -154,9 +154,14 @@ export function extractCodexAccountPlan(response: unknown): string | undefined {
 export function readCodexAccountPlanViaAppServer(
   codexOptions?: ProviderStartOptions["codex"],
 ): Effect.Effect<string | undefined, never> {
-  return Effect.promise(
-    () =>
+  return Effect.tryPromise(
+    (signal) =>
       new Promise<string | undefined>((resolve, reject) => {
+        if (signal.aborted) {
+          resolve(undefined);
+          return;
+        }
+
         const child = spawn(codexOptions?.binaryPath ?? "codex", ["app-server"], {
           env: codexOptions?.homePath
             ? { ...process.env, CODEX_HOME: codexOptions.homePath }
@@ -177,6 +182,7 @@ export function readCodexAccountPlanViaAppServer(
         const cleanup = () => {
           clearTimeout(timeout);
           output.close();
+          signal.removeEventListener("abort", handleAbort);
         };
 
         const finish = (plan: string | undefined) => {
@@ -195,8 +201,20 @@ export function readCodexAccountPlanViaAppServer(
           reject(error);
         };
 
+        const handleAbort = () => {
+          if (settled) return;
+          settled = true;
+          cleanup();
+          child.kill();
+          resolve(undefined);
+        };
+
+        signal.addEventListener("abort", handleAbort, { once: true });
         child.once("error", fail);
-        child.once("exit", () => finish(undefined));
+        // Wait for `close`, not `exit`, so stdout has a chance to flush.
+        // The app-server can terminate quickly after writing the response,
+        // and resolving on `exit` can race the readline consumer.
+        child.once("close", () => finish(undefined));
 
         output.on("line", (line) => {
           const decoded = decodeAppServerResponse(line);

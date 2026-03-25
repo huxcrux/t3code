@@ -285,6 +285,19 @@ describe("readCodexAccountSnapshot", () => {
       sparkEnabled: true,
     });
   });
+
+  it("accepts snake_case plan fields from account/read payloads", () => {
+    expect(
+      readCodexAccountSnapshot({
+        type: "chatgpt",
+        plan_type: "team",
+      }),
+    ).toEqual({
+      type: "chatgpt",
+      planType: "team",
+      sparkEnabled: true,
+    });
+  });
 });
 
 describe("resolveCodexModelForAccount", () => {
