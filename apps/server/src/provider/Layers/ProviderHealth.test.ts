@@ -3,6 +3,7 @@ import { describe, it, assert } from "@effect/vitest";
 import { Effect, FileSystem, Layer, Path, Sink, Stream } from "effect";
 import * as PlatformError from "effect/PlatformError";
 import { ChildProcessSpawner } from "effect/unstable/process";
+import { vi } from "vitest";
 
 import {
   checkClaudeProviderStatus,
@@ -135,13 +136,33 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
     it.effect("reads the codex plan via app-server when login status omits it", () =>
       Effect.gen(function* () {
         yield* withTempCodexHome();
-        const status = yield* checkCodexProviderStatus;
+        yield* Effect.sync(() => {
+          vi.resetModules();
+          vi.doMock("../codexAccount", async () => {
+            const actual =
+              await vi.importActual<typeof import("../codexAccount")>("../codexAccount");
+            return {
+              ...actual,
+              readCodexAccountPlanViaAppServer: () => Effect.succeed("team"),
+            };
+          });
+        });
+
+        const { checkCodexProviderStatus: checkCodexProviderStatusWithPlanMock } =
+          yield* Effect.promise(() => import("./ProviderHealth"));
+        const status = yield* checkCodexProviderStatusWithPlanMock;
         assert.strictEqual(status.provider, "codex");
         assert.strictEqual(status.status, "ready");
         assert.strictEqual(status.available, true);
         assert.strictEqual(status.authStatus, "authenticated");
         assert.strictEqual(status.plan, "team");
       }).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            vi.doUnmock("../codexAccount");
+            vi.resetModules();
+          }),
+        ),
         Effect.provide(
           mockSpawnerLayer((args) => {
             const joined = args.join(" ");
@@ -149,14 +170,6 @@ it.layer(NodeServices.layer)("ProviderHealth", (it) => {
             if (joined === "login status") {
               return {
                 stdout: '{"authenticated":true}\n',
-                stderr: "",
-                code: 0,
-              };
-            }
-            if (joined === "app-server") {
-              return {
-                stdout:
-                  '{"id":1,"result":{}}\n{"id":2,"result":{"account":{"type":"chatgpt","planType":"team"}}}\n',
                 stderr: "",
                 code: 0,
               };

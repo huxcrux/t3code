@@ -79,6 +79,7 @@ const TIMESTAMP_FORMAT_LABELS = {
   "12-hour": "12-hour",
   "24-hour": "24-hour",
 } as const;
+const PROVIDER_STATUS_AUTO_REFRESH_DEBOUNCE_MS = 300;
 
 type InstallBinarySettingsKey = "claudeBinaryPath" | "codexBinaryPath";
 type InstallProviderSettings = {
@@ -312,6 +313,7 @@ function SettingsRouteView() {
     [providerStartOptions],
   );
   const lastAutoRefreshKeyRef = useRef<string | null>(null);
+  const providerStatusRefreshRequestRef = useRef(0);
 
   const updateProviderStatuses = useCallback(
     (providers: ServerConfig["providers"]) => {
@@ -513,17 +515,28 @@ function SettingsRouteView() {
     if (lastAutoRefreshKeyRef.current === providerRefreshKey) return;
 
     lastAutoRefreshKeyRef.current = providerRefreshKey;
+    const requestId = providerStatusRefreshRequestRef.current + 1;
+    providerStatusRefreshRequestRef.current = requestId;
+    let cancelled = false;
+    const timeoutId = window.setTimeout(() => {
+      void ensureNativeApi()
+        .server.refreshProviderStatuses({ providerOptions: providerStartOptions })
+        .then((result) => {
+          if (cancelled || providerStatusRefreshRequestRef.current !== requestId) return;
+          updateProviderStatuses(result.providers);
+        })
+        .catch((error) => {
+          if (cancelled || providerStatusRefreshRequestRef.current !== requestId) return;
+          setRefreshProviderStatusesError(
+            error instanceof Error ? error.message : "Unable to refresh provider statuses.",
+          );
+        });
+    }, PROVIDER_STATUS_AUTO_REFRESH_DEBOUNCE_MS);
 
-    void ensureNativeApi()
-      .server.refreshProviderStatuses({ providerOptions: providerStartOptions })
-      .then((result) => {
-        updateProviderStatuses(result.providers);
-      })
-      .catch((error) => {
-        setRefreshProviderStatusesError(
-          error instanceof Error ? error.message : "Unable to refresh provider statuses.",
-        );
-      });
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeoutId);
+    };
   }, [providerRefreshKey, providerStartOptions, serverConfigQuery.data, updateProviderStatuses]);
 
   async function restoreDefaults() {

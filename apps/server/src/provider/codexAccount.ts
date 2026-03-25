@@ -171,13 +171,7 @@ export function readCodexAccountPlanViaAppServer(
         });
         let settled = false;
         const output = readline.createInterface({ input: child.stdout });
-        const timeout = setTimeout(() => {
-          if (settled) return;
-          settled = true;
-          output.close();
-          child.kill();
-          resolve(undefined);
-        }, APP_SERVER_PROBE_TIMEOUT_MS);
+        let timeout: ReturnType<typeof setTimeout> | undefined;
 
         const cleanup = () => {
           clearTimeout(timeout);
@@ -208,6 +202,10 @@ export function readCodexAccountPlanViaAppServer(
           child.kill();
           resolve(undefined);
         };
+
+        timeout = setTimeout(() => {
+          finish(undefined);
+        }, APP_SERVER_PROBE_TIMEOUT_MS);
 
         signal.addEventListener("abort", handleAbort, { once: true });
         child.once("error", fail);
