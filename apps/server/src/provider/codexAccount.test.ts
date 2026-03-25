@@ -92,4 +92,38 @@ describe("readCodexAccountPlanViaAppServer", () => {
 
     await expect(Effect.runPromise(effect)).resolves.toBeUndefined();
   });
+
+  it("returns undefined when initialize responds with a string error", async () => {
+    const effect = readCodexAccountPlanViaAppServer().pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            mockHandle({
+              stdout: ['{"id":1,"error":"unauthorized"}\n'],
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await expect(Effect.runPromise(effect)).resolves.toBeUndefined();
+  });
+
+  it("returns undefined when account/read responds with a string error", async () => {
+    const effect = readCodexAccountPlanViaAppServer().pipe(
+      Effect.provideService(
+        ChildProcessSpawner.ChildProcessSpawner,
+        ChildProcessSpawner.make(() =>
+          Effect.succeed(
+            mockHandle({
+              stdout: ['{"id":1,"result":{}}\n', '{"id":2,"error":"unauthorized"}\n'],
+            }),
+          ),
+        ),
+      ),
+    );
+
+    await expect(Effect.runPromise(effect)).resolves.toBeUndefined();
+  });
 });

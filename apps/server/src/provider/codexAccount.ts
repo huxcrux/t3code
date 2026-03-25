@@ -82,6 +82,10 @@ function asString(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
 }
 
+function hasAppServerError(value: unknown): boolean {
+  return value != null;
+}
+
 function isCodexPlanType(value: string): value is CodexPlanType {
   switch (value) {
     case "free":
@@ -223,7 +227,7 @@ export function readCodexAccountPlanViaAppServer(
 
           const record = decoded.value;
           if (record.id === APP_SERVER_INITIALIZE_REQUEST_ID) {
-            if (record.error && typeof record.error === "object") {
+            if (hasAppServerError(record.error)) {
               return yield* Effect.fail(new Error("Codex app-server initialize failed."));
             }
             return true;
@@ -234,9 +238,7 @@ export function readCodexAccountPlanViaAppServer(
 
           yield* Ref.set(
             planRef,
-            record.error && typeof record.error === "object"
-              ? undefined
-              : extractCodexAccountPlan(record),
+            hasAppServerError(record.error) ? undefined : extractCodexAccountPlan(record),
           );
           return false;
         }),
