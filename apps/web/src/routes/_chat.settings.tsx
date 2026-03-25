@@ -82,6 +82,8 @@ const TIMESTAMP_FORMAT_LABELS = {
 const PROVIDER_STATUS_AUTO_REFRESH_DEBOUNCE_MS = 300;
 
 type InstallBinarySettingsKey = "claudeBinaryPath" | "codexBinaryPath";
+type ProviderCliSource = "override" | "path";
+
 type InstallProviderSettings = {
   provider: ProviderKind;
   title: string;
@@ -143,6 +145,43 @@ function providerStatusSummary(status: ServerProviderStatus | undefined): string
   return "Error";
 }
 
+function providerStatusListMessage(status: ServerProviderStatus | undefined): string | null {
+  if (!status || status.status === "ready" || status.authStatus === "unauthenticated") {
+    return null;
+  }
+  if (!status.available) {
+    return null;
+  }
+  return status.message ?? null;
+}
+
+function resolveProviderCliSource(binaryPathValue: string): ProviderCliSource {
+  return binaryPathValue.trim().length > 0 ? "override" : "path";
+}
+
+function providerCliSourceLabel(source: ProviderCliSource): string {
+  return source === "override" ? "Override" : "PATH";
+}
+
+function providerCliDetectionDescription(
+  status: ServerProviderStatus | undefined,
+  source: ProviderCliSource,
+): string {
+  if (!status) {
+    return source === "override"
+      ? "Use Refresh to check whether the configured binary path override is available."
+      : "Use Refresh to check whether the default CLI is available on your PATH.";
+  }
+  if (status.available) {
+    return source === "override"
+      ? "The configured binary path override was detected and will be used for new sessions."
+      : "The default CLI was detected on your PATH and will be used for new sessions.";
+  }
+  return source === "override"
+    ? "The configured binary path override could not be detected. Check the path below or clear it to fall back to your PATH."
+    : "The default CLI could not be detected on your PATH.";
+}
+
 function shouldShowProviderAlert(status: ServerProviderStatus | undefined): boolean {
   if (!status) return false;
   return !status.available || status.authStatus === "unauthenticated";
@@ -157,9 +196,12 @@ function providerAlertTitle(status: ServerProviderStatus | undefined): string {
 function providerAlertDescription(
   providerTitle: string,
   status: ServerProviderStatus | undefined,
+  source: ProviderCliSource,
 ): string {
   if (!status || !status.available) {
-    return "The default CLI for this provider could not be detected on your PATH. Install it, update your PATH, or use the binary path override below for new sessions.";
+    return source === "override"
+      ? "The configured binary path override for this provider could not be detected. Update the path below or clear it to fall back to your PATH."
+      : "The default CLI for this provider could not be detected on your PATH. Install it, update your PATH, or use the binary path override below for new sessions.";
   }
   if (status.authStatus === "unauthenticated") {
     return `Log in to ${providerTitle} to start using its models.`;
@@ -895,6 +937,7 @@ function SettingsRouteView() {
                     installProviderSettings.binaryPathKey === "claudeBinaryPath"
                       ? claudeBinaryPath
                       : codexBinaryPath;
+                  const cliSource = resolveProviderCliSource(binaryPathValue);
                   const isInstallOverrideDirty =
                     providerSettings.provider === "codex"
                       ? settings.codexBinaryPath !== defaults.codexBinaryPath ||
@@ -928,6 +971,7 @@ function SettingsRouteView() {
                     refreshProviderStatusMutation.isPending &&
                     refreshProviderStatusMutation.variables === providerSettings.provider;
                   const showProviderAlert = shouldShowProviderAlert(providerStatus);
+                  const providerListMessage = providerStatusListMessage(providerStatus);
                   return (
                     <Collapsible
                       key={providerSettings.provider}
@@ -974,11 +1018,7 @@ function SettingsRouteView() {
                             </div>
                             <p className="mt-1 text-xs text-muted-foreground">
                               {isDisabled ? "Disabled" : providerStatusSummary(providerStatus)}
-                              {providerStatus?.message &&
-                              providerStatus.status !== "ready" &&
-                              providerStatus.authStatus !== "unauthenticated" ? (
-                                <> - {providerStatus.message}</>
-                              ) : null}
+                              {providerListMessage ? <> - {providerListMessage}</> : null}
                             </p>
                           </div>
                           <ChevronDownIcon
@@ -1005,7 +1045,11 @@ function SettingsRouteView() {
                                   {providerAlertTitle(providerStatus)}
                                 </p>
                                 <p className="mt-0.5 text-xs opacity-80">
-                                  {providerAlertDescription(providerSettings.title, providerStatus)}
+                                  {providerAlertDescription(
+                                    providerSettings.title,
+                                    providerStatus,
+                                    cliSource,
+                                  )}
                                 </p>
                               </div>
                             </div>
@@ -1215,16 +1259,8 @@ function SettingsRouteView() {
                           </SettingsRow>
 
                           <SettingsRow
-                            title="CLI on PATH"
-                            description={
-                              providerStatus == null
-                                ? "Use Refresh to check whether the default CLI is available on your PATH."
-                                : isCliDetected
-                                  ? "The default CLI was detected on your PATH."
-                                  : binaryPathValue.trim().length > 0
-                                    ? "The default CLI was not found on your PATH. New sessions can still use the binary path override below."
-                                    : (providerStatus.message ?? "Not found on your PATH.")
-                            }
+                            title="CLI detected"
+                            description={providerCliDetectionDescription(providerStatus, cliSource)}
                             control={
                               <div className="flex items-center gap-2">
                                 <span
@@ -1241,10 +1277,8 @@ function SettingsRouteView() {
                                   {providerStatus == null
                                     ? "Unknown"
                                     : isCliDetected
-                                      ? "Yes"
-                                      : binaryPathValue.trim().length > 0
-                                        ? "No (override set)"
-                                        : "No"}
+                                      ? `Yes (${providerCliSourceLabel(cliSource)})`
+                                      : `No (${providerCliSourceLabel(cliSource)})`}
                                 </code>
                               </div>
                             }
@@ -1253,7 +1287,7 @@ function SettingsRouteView() {
                           {isCliDetected && providerStatus?.version ? (
                             <SettingsRow
                               title="CLI version"
-                              description="Version reported by the provider CLI."
+                              description="Version reported by the active provider CLI."
                               control={
                                 <code className="text-xs font-medium text-muted-foreground">
                                   {providerStatus.version}
