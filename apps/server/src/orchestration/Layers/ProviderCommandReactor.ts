@@ -13,6 +13,7 @@ import {
   type TurnId,
 } from "@t3tools/contracts";
 import { isTemporaryWorktreeBranch, WORKTREE_BRANCH_PREFIX } from "@t3tools/shared/git";
+import { truncate } from "@t3tools/shared/String";
 import * as Cache from "effect/Cache";
 import * as Cause from "effect/Cause";
 import * as Crypto from "effect/Crypto";
@@ -169,9 +170,13 @@ function canReplaceThreadTitle(currentTitle: string, titleSeed?: string): boolea
   }
 
   const trimmedTitleSeed = titleSeed?.trim();
-  return trimmedTitleSeed !== undefined && trimmedTitleSeed.length > 0
-    ? trimmedCurrentTitle === trimmedTitleSeed
-    : false;
+  if (trimmedTitleSeed === undefined || trimmedTitleSeed.length === 0) {
+    return false;
+  }
+
+  return (
+    trimmedCurrentTitle === trimmedTitleSeed || truncate(trimmedCurrentTitle) === trimmedTitleSeed
+  );
 }
 
 function findProviderAdapterRequestError(
@@ -273,7 +278,7 @@ const make = Effect.gen(function* () {
 
   const threadModelSelections = new Map<string, ModelSelection>();
 
-  const shouldSkipCopilotFirstTurnTextGeneration = Effect.fnUntraced(function* (input: {
+  const shouldSkipCopilotFirstTurnBranchGeneration = Effect.fnUntraced(function* (input: {
     readonly threadModelSelection: ModelSelection;
     readonly textGenerationModelSelection: ModelSelection;
   }) {
@@ -777,7 +782,7 @@ const make = Effect.gen(function* () {
               yield* providerRegistry.getProviders,
             );
       if (
-        yield* shouldSkipCopilotFirstTurnTextGeneration({
+        yield* shouldSkipCopilotFirstTurnBranchGeneration({
           threadModelSelection: input.threadModelSelection,
           textGenerationModelSelection: modelSelection,
         })
@@ -830,21 +835,14 @@ const make = Effect.gen(function* () {
       yield* Effect.gen(function* () {
         const { textGenerationModelSelection: modelSelection } =
           yield* serverSettingsService.getSettings;
-        if (
-          yield* shouldSkipCopilotFirstTurnTextGeneration({
-            threadModelSelection: input.threadModelSelection,
-            textGenerationModelSelection: modelSelection,
-          })
-        ) {
-          return;
-        }
-
-        const generated = yield* textGeneration.generateThreadTitle({
-          cwd: input.cwd,
-          message: input.messageText,
-          ...(attachments.length > 0 ? { attachments } : {}),
-          modelSelection,
-        });
+        const generated = yield* Effect.suspend(() =>
+          textGeneration.generateThreadTitle({
+            cwd: input.cwd,
+            message: input.messageText,
+            ...(attachments.length > 0 ? { attachments } : {}),
+            modelSelection,
+          }),
+        ).pipe(Effect.retry({ times: 2 }));
         if (!generated) return;
 
         const thread = yield* resolveThread(input.threadId);
@@ -1076,22 +1074,26 @@ const make = Effect.gen(function* () {
         ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
       };
 
-      yield* maybeGenerateAndRenameWorktreeBranchForFirstTurn({
-        threadId: event.payload.threadId,
-        threadModelSelection: thread.modelSelection,
-        branch: thread.branch,
-        worktreePath: thread.worktreePath,
-        ...generationInput,
-      }).pipe(Effect.forkScoped);
-
       if (canReplaceThreadTitle(thread.title, event.payload.titleSeed)) {
-        yield* maybeGenerateThreadTitleForFirstTurn({
+        yield* firstTurnAuxiliaryWorker.enqueue(
+          maybeGenerateThreadTitleForFirstTurn({
+            threadId: event.payload.threadId,
+            threadModelSelection: thread.modelSelection,
+            cwd: generationCwd,
+            ...generationInput,
+          }),
+        );
+      }
+
+      yield* firstTurnAuxiliaryWorker.enqueue(
+        maybeGenerateAndRenameWorktreeBranchForFirstTurn({
           threadId: event.payload.threadId,
           threadModelSelection: thread.modelSelection,
-          cwd: generationCwd,
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
           ...generationInput,
-        }).pipe(Effect.forkScoped);
-      }
+        }),
+      );
     }
 
     const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
@@ -1354,6 +1356,7 @@ const make = Effect.gen(function* () {
       }),
     );
 
+  const firstTurnAuxiliaryWorker = yield* makeDrainableWorker((job: Effect.Effect<void>) => job);
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {
@@ -1397,6 +1400,7 @@ const make = Effect.gen(function* () {
     start,
     drain: Effect.gen(function* () {
       yield* worker.drain;
+      yield* firstTurnAuxiliaryWorker.drain;
       yield* threadTitleRegenerationWorker.drain;
     }),
   } satisfies ProviderCommandReactorShape;
