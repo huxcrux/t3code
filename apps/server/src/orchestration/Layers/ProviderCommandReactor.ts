@@ -95,7 +95,6 @@ const DEFAULT_THREAD_TITLE = "New thread";
 const MAX_REGENERATION_ATTACHMENTS = 4;
 const MAX_THREAD_TITLE_CONTEXT_CHARS = 8_000;
 const THREAD_TITLE_CONTEXT_TRUNCATION_MARKER = "[Earlier content truncated]\n\n";
-const COPILOT_PROVIDER = ProviderDriverKind.make("copilot");
 
 function formatThreadTitleContext(
   messages: ReadonlyArray<{
@@ -277,26 +276,6 @@ const make = Effect.gen(function* () {
     );
 
   const threadModelSelections = new Map<string, ModelSelection>();
-
-  const shouldSkipCopilotFirstTurnBranchGeneration = Effect.fnUntraced(function* (input: {
-    readonly threadModelSelection: ModelSelection;
-    readonly textGenerationModelSelection: ModelSelection;
-  }) {
-    const [threadProvider, textGenerationProvider] = yield* Effect.all(
-      [
-        providerService.getInstanceInfo(input.threadModelSelection.instanceId).pipe(Effect.option),
-        providerService
-          .getInstanceInfo(input.textGenerationModelSelection.instanceId)
-          .pipe(Effect.option),
-      ],
-      { concurrency: "unbounded" },
-    );
-
-    return (
-      Option.getOrUndefined(threadProvider)?.driverKind === COPILOT_PROVIDER &&
-      Option.getOrUndefined(textGenerationProvider)?.driverKind === COPILOT_PROVIDER
-    );
-  });
 
   const appendProviderFailureActivity = (input: {
     readonly threadId: ThreadId;
@@ -756,7 +735,6 @@ const make = Effect.gen(function* () {
     "maybeGenerateAndRenameWorktreeBranchForFirstTurn",
   )(function* (input: {
     readonly threadId: ThreadId;
-    readonly threadModelSelection: ModelSelection;
     readonly branch: string | null;
     readonly worktreePath: string | null;
     readonly messageText: string;
@@ -781,15 +759,6 @@ const make = Effect.gen(function* () {
               settings,
               yield* providerRegistry.getProviders,
             );
-      if (
-        yield* shouldSkipCopilotFirstTurnBranchGeneration({
-          threadModelSelection: input.threadModelSelection,
-          textGenerationModelSelection: modelSelection,
-        })
-      ) {
-        return;
-      }
-
       const generated = yield* textGeneration.generateBranchName({
         cwd,
         message: input.messageText,
@@ -1088,7 +1057,6 @@ const make = Effect.gen(function* () {
       yield* firstTurnAuxiliaryWorker.enqueue(
         maybeGenerateAndRenameWorktreeBranchForFirstTurn({
           threadId: event.payload.threadId,
-          threadModelSelection: thread.modelSelection,
           branch: thread.branch,
           worktreePath: thread.worktreePath,
           ...generationInput,
