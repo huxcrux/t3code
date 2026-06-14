@@ -19,6 +19,7 @@ import {
   removeEnvironmentState,
   selectEnvironmentState,
   selectProjectsAcrossEnvironments,
+  selectSidebarThreadSummaryByRef,
   selectThreadByRef,
   selectThreadExistsByRef,
   setThreadBranch,
@@ -26,7 +27,12 @@ import {
   type AppState,
   type EnvironmentState,
 } from "./store";
-import { DEFAULT_INTERACTION_MODE, DEFAULT_RUNTIME_MODE, type Thread } from "./types";
+import {
+  DEFAULT_INTERACTION_MODE,
+  DEFAULT_RUNTIME_MODE,
+  type SidebarThreadSummary,
+  type Thread,
+} from "./types";
 
 const localEnvironmentId = EnvironmentId.make("environment-local");
 const remoteEnvironmentId = EnvironmentId.make("environment-remote");
@@ -179,6 +185,31 @@ function makeState(thread: Thread): AppState {
   return withActiveEnvironmentState(environmentState, {
     activeEnvironmentId: thread.environmentId,
   });
+}
+
+function makeSidebarSummary(
+  thread: Thread,
+  overrides: Partial<SidebarThreadSummary> = {},
+): SidebarThreadSummary {
+  return {
+    id: thread.id,
+    environmentId: thread.environmentId,
+    projectId: thread.projectId,
+    title: thread.title,
+    interactionMode: thread.interactionMode,
+    session: thread.session,
+    createdAt: thread.createdAt,
+    archivedAt: thread.archivedAt,
+    updatedAt: thread.updatedAt,
+    latestTurn: thread.latestTurn,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+    latestUserMessageAt: null,
+    hasPendingApprovals: false,
+    hasPendingUserInput: false,
+    hasActionableProposedPlan: false,
+    ...overrides,
+  };
 }
 
 function makeEmptyState(overrides: Partial<AppState & EnvironmentState> = {}): AppState {
@@ -459,6 +490,47 @@ describe("incremental orchestration updates", () => {
     );
 
     expect(localEnvironmentStateOf(next).bootstrapComplete).toBe(false);
+  });
+
+  it("updates an existing sidebar summary when thread metadata changes", () => {
+    const thread = makeThread({
+      title: "Original title",
+      branch: "main",
+      worktreePath: "/tmp/project",
+      updatedAt: "2026-02-27T00:00:00.000Z",
+    });
+    const baseState = makeState(thread);
+    const ref = scopeThreadRef(thread.environmentId, thread.id);
+    const state = withActiveEnvironmentState(localEnvironmentStateOf(baseState), {
+      sidebarThreadSummaryById: {
+        [thread.id]: makeSidebarSummary(thread, {
+          latestUserMessageAt: "2026-02-27T00:00:00.000Z",
+          hasPendingApprovals: true,
+        }),
+      },
+    });
+
+    const next = applyOrchestrationEvent(
+      state,
+      makeEvent("thread.meta-updated", {
+        threadId: thread.id,
+        title: "Copilot title",
+        branch: "feature/copilot-title",
+        worktreePath: "/tmp/project-feature",
+        updatedAt: "2026-02-27T00:00:01.000Z",
+      }),
+      localEnvironmentId,
+    );
+
+    expect(selectThreadByRef(next, ref)?.title).toBe("Copilot title");
+    expect(selectSidebarThreadSummaryByRef(next, ref)).toMatchObject({
+      title: "Copilot title",
+      branch: "feature/copilot-title",
+      worktreePath: "/tmp/project-feature",
+      updatedAt: "2026-02-27T00:00:01.000Z",
+      latestUserMessageAt: "2026-02-27T00:00:00.000Z",
+      hasPendingApprovals: true,
+    });
   });
 
   it("preserves state identity for no-op project and thread deletes", () => {

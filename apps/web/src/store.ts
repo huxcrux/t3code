@@ -492,6 +492,38 @@ function buildTurnDiffSlice(thread: Thread): {
   };
 }
 
+function patchSidebarSummaryMetadata(state: EnvironmentState, thread: Thread): EnvironmentState {
+  const previousSummary = state.sidebarThreadSummaryById[thread.id];
+  if (!previousSummary) {
+    return state;
+  }
+
+  const nextSummary: SidebarThreadSummary = {
+    ...previousSummary,
+    environmentId: thread.environmentId,
+    projectId: thread.projectId,
+    title: thread.title,
+    interactionMode: thread.interactionMode,
+    createdAt: thread.createdAt,
+    archivedAt: thread.archivedAt,
+    updatedAt: thread.updatedAt,
+    branch: thread.branch,
+    worktreePath: thread.worktreePath,
+  };
+
+  if (sidebarThreadSummariesEqual(previousSummary, nextSummary)) {
+    return state;
+  }
+
+  return {
+    ...state,
+    sidebarThreadSummaryById: {
+      ...state.sidebarThreadSummaryById,
+      [thread.id]: nextSummary,
+    },
+  };
+}
+
 function getProjects(state: EnvironmentState): Project[] {
   return state.projectIds.flatMap((projectId) => {
     const project = state.projectById[projectId];
@@ -569,7 +601,8 @@ function ensureThreadRegistered(
  * the active thread has up-to-date state even if the shell stream event
  * hasn't arrived yet (both streams use structural equality checks to avoid
  * unnecessary re-renders when delivering equivalent data).
- * Does NOT write sidebarThreadSummaryById — that is shell-stream-only.
+ * Only patches existing sidebar summaries with thread metadata. Shell-owned
+ * sidebar fields remain authored by the shell stream.
  */
 function writeThreadState(
   state: EnvironmentState,
@@ -597,6 +630,8 @@ function writeThreadState(
       },
     };
   }
+
+  nextState = patchSidebarSummaryMetadata(nextState, nextThread);
 
   if (!threadSessionsEqual(previousThread?.session ?? null, nextThread.session)) {
     nextState = {
