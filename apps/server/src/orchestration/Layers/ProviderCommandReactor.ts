@@ -794,7 +794,6 @@ const make = Effect.gen(function* () {
   const maybeGenerateThreadTitleForFirstTurn = Effect.fn("maybeGenerateThreadTitleForFirstTurn")(
     function* (input: {
       readonly threadId: ThreadId;
-      readonly threadModelSelection: ModelSelection;
       readonly cwd: string;
       readonly messageText: string;
       readonly attachments?: ReadonlyArray<ChatAttachment>;
@@ -1047,7 +1046,6 @@ const make = Effect.gen(function* () {
         yield* firstTurnAuxiliaryWorker.enqueue(
           maybeGenerateThreadTitleForFirstTurn({
             threadId: event.payload.threadId,
-            threadModelSelection: thread.modelSelection,
             cwd: generationCwd,
             ...generationInput,
           }),
