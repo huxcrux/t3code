@@ -1387,6 +1387,10 @@ const make = Effect.gen(function* () {
       const hasPendingTurnStart =
         Option.isSome(pendingTurnStart) && thread.session?.status === "starting";
       const lifecycleEventTurnId = eventTurnId;
+      const providerActiveTurnId =
+        event.type === "turn.completed" && eventTurnId === undefined
+          ? yield* getExpectedProviderTurnIdForThread(thread.id)
+          : undefined;
 
       const conflictsWithActiveTurn =
         activeTurnId !== null &&
@@ -1421,7 +1425,11 @@ const make = Effect.gen(function* () {
             if (conflictsWithActiveTurn) {
               return false;
             }
-            if (activeTurnId !== null && lifecycleEventTurnId === undefined) {
+            if (
+              activeTurnId !== null &&
+              lifecycleEventTurnId === undefined &&
+              sameId(activeTurnId, providerActiveTurnId)
+            ) {
               return false;
             }
             // Only the active turn may close the lifecycle state.
