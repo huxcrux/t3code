@@ -39,6 +39,7 @@ import {
   type ProjectEntriesFailure,
   type ProjectFileFailure,
   type ProjectFileOperation,
+  type ServerConfigStreamEvent,
   ProjectListEntriesError,
   ProjectReadFileError,
   ProjectSearchEntriesError,
@@ -95,10 +96,12 @@ import * as ReviewService from "./review/ReviewService.ts";
 import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts";
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
+import * as VSCodeTunnel from "./vscodeTunnel.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
 import * as TraceDiagnostics from "./diagnostics/TraceDiagnostics.ts";
+import * as ProcessRunner from "./processRunner.ts";
 import * as SourceControlDiscovery from "./sourceControl/SourceControlDiscovery.ts";
 import * as SourceControlRepositoryService from "./sourceControl/SourceControlRepositoryService.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
@@ -117,6 +120,7 @@ import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
+const VSCODE_TUNNEL_REFRESH_INTERVAL = Duration.minutes(1);
 
 function unexpectedCompatibilityError(error: never): never {
   throw new Error(`Unhandled compatibility error: ${String(error)}`);
@@ -906,6 +910,13 @@ const makeWsRpcLayer = (
           );
       };
 
+      const networkAccessEnabled = config.host !== undefined || config.tailscaleServeEnabled;
+      const resolveVSCodeTunnelForSettings = (settings: { enableVSCodeRemoteTunnels: boolean }) =>
+        VSCodeTunnel.resolveVSCodeTunnel({
+          enabled: settings.enableVSCodeRemoteTunnels,
+          networkAccessEnabled,
+        });
+
       const loadServerConfig = Effect.gen(function* () {
         const keybindingsConfig = yield* keybindings.loadConfigState;
         const providers = yield* providerRegistry.getProviders;
@@ -914,6 +925,7 @@ const makeWsRpcLayer = (
         );
         const environment = yield* serverEnvironment.getDescriptor;
         const auth = yield* serverAuth.getDescriptor();
+        const vscodeTunnel = yield* resolveVSCodeTunnelForSettings(settings);
 
         return {
           environment,
@@ -924,6 +936,8 @@ const makeWsRpcLayer = (
           issues: keybindingsConfig.issues,
           providers,
           availableEditors: yield* externalLauncher.resolveAvailableEditors(),
+          vscodeTunnel: vscodeTunnel.tunnel,
+          vscodeTunnelStatus: vscodeTunnel.status,
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,
@@ -1761,40 +1775,81 @@ const makeWsRpcLayer = (
           observeRpcStreamEffect(
             WS_METHODS.subscribeServerConfig,
             Effect.gen(function* () {
-              const keybindingsUpdates = keybindings.streamChanges.pipe(
-                Stream.map((event) => ({
-                  version: 1 as const,
-                  type: "keybindingsUpdated" as const,
-                  payload: {
-                    keybindings: event.keybindings,
-                    issues: event.issues,
-                  },
-                })),
-              );
-              const providerStatuses = providerRegistry.streamChanges.pipe(
-                Stream.map((providers) => ({
-                  version: 1 as const,
-                  type: "providerStatuses" as const,
-                  payload: { providers },
-                })),
-                Stream.debounce(Duration.millis(PROVIDER_STATUS_DEBOUNCE_MS)),
-              );
-              const settingsUpdates = serverSettings.streamChanges.pipe(
-                Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
-                Stream.map((settings) => ({
-                  version: 1 as const,
-                  type: "settingsUpdated" as const,
-                  payload: { settings },
-                })),
-              );
+              const processRunner = yield* ProcessRunner.ProcessRunner;
+              const keybindingsUpdates: Stream.Stream<ServerConfigStreamEvent> =
+                keybindings.streamChanges.pipe(
+                  Stream.map((event) => ({
+                    version: 1 as const,
+                    type: "keybindingsUpdated" as const,
+                    payload: {
+                      keybindings: event.keybindings,
+                      issues: event.issues,
+                    },
+                  })),
+                );
+              const providerStatuses: Stream.Stream<ServerConfigStreamEvent> =
+                providerRegistry.streamChanges.pipe(
+                  Stream.map((providers) => ({
+                    version: 1 as const,
+                    type: "providerStatuses" as const,
+                    payload: { providers },
+                  })),
+                  Stream.debounce(Duration.millis(PROVIDER_STATUS_DEBOUNCE_MS)),
+                );
+              const settingsUpdates: Stream.Stream<ServerConfigStreamEvent> =
+                serverSettings.streamChanges.pipe(
+                  Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
+                  Stream.map((settings) => ({
+                    version: 1 as const,
+                    type: "settingsUpdated" as const,
+                    payload: { settings },
+                  })),
+                );
+              const toVSCodeTunnelUpdateEvent = (settings: {
+                readonly enableVSCodeRemoteTunnels: boolean;
+              }) =>
+                resolveVSCodeTunnelForSettings(settings).pipe(
+                  Effect.provideService(ProcessRunner.ProcessRunner, processRunner),
+                  Effect.map((vscodeTunnel) => ({
+                    version: 1 as const,
+                    type: "vscodeTunnelUpdated" as const,
+                    payload: {
+                      vscodeTunnel: vscodeTunnel.tunnel,
+                      vscodeTunnelStatus: vscodeTunnel.status,
+                    },
+                  })),
+                );
+              const vscodeTunnelSettingsUpdates: Stream.Stream<ServerConfigStreamEvent> =
+                serverSettings.streamChanges.pipe(
+                  Stream.map((settings) => ServerSettings.redactServerSettingsForClient(settings)),
+                  Stream.mapEffect(toVSCodeTunnelUpdateEvent),
+                );
+              const vscodeTunnelPeriodicUpdates: Stream.Stream<ServerConfigStreamEvent> =
+                Stream.tick(VSCODE_TUNNEL_REFRESH_INTERVAL).pipe(
+                  Stream.mapEffect(() =>
+                    serverSettings.getSettings.pipe(
+                      Effect.map((settings) =>
+                        ServerSettings.redactServerSettingsForClient(settings),
+                      ),
+                      Effect.catchCause((cause) =>
+                        Effect.logWarning("failed to refresh VS Code tunnel settings", {
+                          cause,
+                        }).pipe(Effect.as({ enableVSCodeRemoteTunnels: false })),
+                      ),
+                      Effect.flatMap(toVSCodeTunnelUpdateEvent),
+                    ),
+                  ),
+                );
 
               yield* providerRegistry
                 .refresh()
                 .pipe(Effect.ignoreCause({ log: true }), Effect.forkScoped);
 
-              const liveUpdates = Stream.merge(
-                keybindingsUpdates,
-                Stream.merge(providerStatuses, settingsUpdates),
+              const liveUpdates: Stream.Stream<ServerConfigStreamEvent> = keybindingsUpdates.pipe(
+                Stream.merge(providerStatuses),
+                Stream.merge(settingsUpdates),
+                Stream.merge(vscodeTunnelSettingsUpdates),
+                Stream.merge(vscodeTunnelPeriodicUpdates),
               );
 
               return Stream.concat(
@@ -1883,6 +1938,7 @@ export const websocketRpcRouteLayer = Layer.unwrap(
           Effect.provide(
             makeWsRpcLayer(session, previewAutomationBroker).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
+              Layer.provideMerge(ProcessRunner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
