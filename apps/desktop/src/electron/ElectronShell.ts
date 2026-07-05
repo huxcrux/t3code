@@ -5,7 +5,7 @@ import * as Option from "effect/Option";
 
 import * as Electron from "electron";
 
-const SAFE_EXTERNAL_PROTOCOLS = new Set(["http:", "https:"]);
+const SAFE_EXTERNAL_PROTOCOLS = new Set(["http:", "https:", "vscode:"]);
 
 export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
   if (typeof rawUrl !== "string") {

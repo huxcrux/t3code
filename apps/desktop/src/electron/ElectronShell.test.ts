@@ -46,6 +46,22 @@ describe("ElectronShell", () => {
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
 
+  it.effect("opens VS Code protocol URLs", () =>
+    Effect.gen(function* () {
+      openExternalMock.mockResolvedValue(undefined);
+
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal(
+        "vscode://vscode-remote/tunnel+devbox/workspaces/demo",
+      );
+
+      assert.equal(result, true);
+      assert.deepEqual(openExternalMock.mock.calls, [
+        ["vscode://vscode-remote/tunnel+devbox/workspaces/demo"],
+      ]);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
   it.effect("returns false when Electron rejects openExternal", () =>
     Effect.gen(function* () {
       openExternalMock.mockRejectedValue(new Error("open failed"));

@@ -274,27 +274,14 @@ export const OpenInPicker = memo(function OpenInPicker({
     const handler = (e: globalThis.KeyboardEvent) => {
       if (!isOpenFavoriteEditorShortcut(e, keybindings)) return;
       if (!openInCwd) return;
-      if (!preferredEditor) return;
+      if (!primaryOption) return;
 
       e.preventDefault();
-      void openInEditorMutation({
-        environmentId,
-        input: {
-          cwd: openInCwd,
-          editor: preferredEditor,
-        },
-      });
+      void openOption(primaryOption);
     };
     window.addEventListener("keydown", handler);
     return () => window.removeEventListener("keydown", handler);
-  }, [
-    enableShortcut,
-    environmentId,
-    keybindings,
-    openInCwd,
-    openInEditorMutation,
-    preferredEditor,
-  ]);
+  }, [enableShortcut, keybindings, openInCwd, openOption, primaryOption]);
 
   return (
     <Group aria-label="Open in editor">

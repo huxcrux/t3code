@@ -4248,7 +4248,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const wsUrl = yield* getWsServerUrl("/ws");
       const events = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.take(2), Stream.runCollect),
+          client[WS_METHODS.subscribeServerConfig]({}).pipe(
+            Stream.filter(
+              (event) => event.type === "snapshot" || event.type === "keybindingsUpdated",
+            ),
+            Stream.take(2),
+            Stream.runCollect,
+          ),
         ),
       );
 
@@ -4312,7 +4318,13 @@ it.layer(NodeServices.layer)("server router seam", (it) => {
       const wsUrl = yield* getWsServerUrl("/ws");
       const events = yield* Effect.scoped(
         withWsRpcClient(wsUrl, (client) =>
-          client[WS_METHODS.subscribeServerConfig]({}).pipe(Stream.take(2), Stream.runCollect),
+          client[WS_METHODS.subscribeServerConfig]({}).pipe(
+            Stream.filter(
+              (event) => event.type === "snapshot" || event.type === "providerStatuses",
+            ),
+            Stream.take(2),
+            Stream.runCollect,
+          ),
         ),
       );
 

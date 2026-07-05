@@ -116,6 +116,7 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
+import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -910,7 +911,10 @@ const makeWsRpcLayer = (
           );
       };
 
-      const networkAccessEnabled = config.host !== undefined || config.tailscaleServeEnabled;
+      const networkAccessEnabled =
+        config.tailscaleServeEnabled ||
+        (config.host !== undefined &&
+          (isWildcardHost(config.host) || !isLoopbackHost(config.host)));
       const resolveVSCodeTunnelForSettings = (settings: { enableVSCodeRemoteTunnels: boolean }) =>
         VSCodeTunnel.resolveVSCodeTunnel({
           enabled: settings.enableVSCodeRemoteTunnels,
@@ -1831,13 +1835,20 @@ const makeWsRpcLayer = (
                       Effect.map((settings) =>
                         ServerSettings.redactServerSettingsForClient(settings),
                       ),
+                      Effect.flatMap(toVSCodeTunnelUpdateEvent),
+                      Effect.map((event) => Option.some(event)),
                       Effect.catchCause((cause) =>
                         Effect.logWarning("failed to refresh VS Code tunnel settings", {
                           cause,
-                        }).pipe(Effect.as({ enableVSCodeRemoteTunnels: false })),
+                        }).pipe(Effect.as(Option.none<ServerConfigStreamEvent>())),
                       ),
-                      Effect.flatMap(toVSCodeTunnelUpdateEvent),
                     ),
+                  ),
+                  Stream.flatMap((event) =>
+                    Option.match(event, {
+                      onNone: () => Stream.empty,
+                      onSome: (resolvedEvent) => Stream.make(resolvedEvent),
+                    }),
                   ),
                 );
 
