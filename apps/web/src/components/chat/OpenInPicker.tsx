@@ -214,7 +214,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
   const [preferVSCodeTunnel, setPreferVSCodeTunnel] = useState(false);
-  const latestOpenActionRef = useRef(0);
+  const latestEditorSelectionRef = useRef(0);
   const editorOptions = useMemo(
     () => resolveOptions(navigator.platform, availableEditors),
     [availableEditors],
@@ -250,8 +250,7 @@ export const OpenInPicker = memo(function OpenInPicker({
     (option: PickerOption | null) => {
       if (!openInCwd || !option) return;
       if (isVSCodeTunnelOption(option)) {
-        const actionId = latestOpenActionRef.current + 1;
-        latestOpenActionRef.current = actionId;
+        const editorSelectionVersion = latestEditorSelectionRef.current;
         const url = openVSCodeRemoteTunnelsInDesktop
           ? buildVSCodeTunnelDesktopUrl(option.vscodeTunnel.machineName, openInCwd)
           : buildVSCodeTunnelUrl(option.vscodeTunnel.machineName, openInCwd);
@@ -267,11 +266,11 @@ export const OpenInPicker = memo(function OpenInPicker({
         void localApi.shell
           .openExternal(url)
           .then(() => {
-            if (latestOpenActionRef.current !== actionId) return;
+            if (latestEditorSelectionRef.current !== editorSelectionVersion) return;
             setPreferVSCodeTunnel(true);
           })
           .catch((error) => {
-            if (latestOpenActionRef.current !== actionId) return;
+            if (latestEditorSelectionRef.current !== editorSelectionVersion) return;
             setPreferVSCodeTunnel(false);
             toastManager.add(
               stackedThreadToast({
@@ -285,7 +284,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       }
 
       const editor = option.value;
-      latestOpenActionRef.current += 1;
+      latestEditorSelectionRef.current += 1;
       setPreferVSCodeTunnel(false);
       const result = openInEditorMutation({
         environmentId,
