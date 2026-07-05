@@ -4,7 +4,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerVSCodeTunnel,
 } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useMemo, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
 import { usePreferredEditor } from "../../editorPreferences";
 import { ChevronDownIcon, FolderClosedIcon } from "lucide-react";
@@ -214,6 +214,7 @@ export const OpenInPicker = memo(function OpenInPicker({
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
   const [preferVSCodeTunnel, setPreferVSCodeTunnel] = useState(false);
+  const latestOpenActionRef = useRef(0);
   const editorOptions = useMemo(
     () => resolveOptions(navigator.platform, availableEditors),
     [availableEditors],
@@ -249,6 +250,8 @@ export const OpenInPicker = memo(function OpenInPicker({
     (option: PickerOption | null) => {
       if (!openInCwd || !option) return;
       if (isVSCodeTunnelOption(option)) {
+        const actionId = latestOpenActionRef.current + 1;
+        latestOpenActionRef.current = actionId;
         const url = openVSCodeRemoteTunnelsInDesktop
           ? buildVSCodeTunnelDesktopUrl(option.vscodeTunnel.machineName, openInCwd)
           : buildVSCodeTunnelUrl(option.vscodeTunnel.machineName, openInCwd);
@@ -264,9 +267,11 @@ export const OpenInPicker = memo(function OpenInPicker({
         void localApi.shell
           .openExternal(url)
           .then(() => {
+            if (latestOpenActionRef.current !== actionId) return;
             setPreferVSCodeTunnel(true);
           })
           .catch((error) => {
+            if (latestOpenActionRef.current !== actionId) return;
             setPreferVSCodeTunnel(false);
             toastManager.add(
               stackedThreadToast({
@@ -280,6 +285,7 @@ export const OpenInPicker = memo(function OpenInPicker({
       }
 
       const editor = option.value;
+      latestOpenActionRef.current += 1;
       setPreferVSCodeTunnel(false);
       const result = openInEditorMutation({
         environmentId,
