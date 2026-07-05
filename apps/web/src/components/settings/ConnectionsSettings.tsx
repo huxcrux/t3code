@@ -2933,7 +2933,7 @@ export function ConnectionsSettings() {
     const statusDescription = !primarySettings.enableVSCodeRemoteTunnels
       ? "Disabled. T3 Code is not checking code tunnel status."
       : !status.checked
-        ? "Not checked because network access is not enabled for this environment."
+        ? "Tunnel status has not been checked yet."
         : status.connected
           ? `Connected${status.machineName ? ` as ${status.machineName}` : ""}.`
           : "No connected VS Code tunnel was detected.";

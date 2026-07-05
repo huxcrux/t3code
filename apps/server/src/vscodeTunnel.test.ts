@@ -76,6 +76,67 @@ describe("vscode tunnel status resolution", () => {
     ),
   );
 
+  it.effect("accepts tunnel:null and preserves service status", () =>
+    Effect.gen(function* () {
+      const resolved = yield* VSCodeTunnel.resolveVSCodeTunnel({
+        enabled: true,
+      });
+
+      expect(resolved.tunnel).toBeNull();
+      expect(resolved.status).toEqual({
+        checked: true,
+        connected: false,
+        machineName: null,
+        serviceInstalled: true,
+      });
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(ProcessRunner.ProcessRunner, {
+          run: () =>
+            Effect.succeed({
+              stdout: '{"tunnel":null,"service_installed":true}',
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            }),
+        }),
+      ),
+    ),
+  );
+
+  it.effect("skips unrelated JSON and parses the status payload", () =>
+    Effect.gen(function* () {
+      const resolved = yield* VSCodeTunnel.resolveVSCodeTunnel({
+        enabled: true,
+      });
+
+      expect(resolved.status.checked).toBe(true);
+      expect(resolved.status.connected).toBe(true);
+      expect(resolved.status.machineName).toBe("devbox");
+      expect(resolved.status.serviceInstalled).toBe(true);
+      expect(resolved.tunnel).toEqual({ machineName: "devbox" });
+    }).pipe(
+      Effect.provide(
+        Layer.succeed(ProcessRunner.ProcessRunner, {
+          run: () =>
+            Effect.succeed({
+              stdout: [
+                '{"log":"starting"}',
+                '{"tunnel":{"name":"devbox","tunnel":"connected"},"service_installed":true}',
+              ].join("\n"),
+              stderr: "",
+              code: ChildProcessSpawner.ExitCode(0),
+              timedOut: false,
+              stdoutTruncated: false,
+              stderrTruncated: false,
+            }),
+        }),
+      ),
+    ),
+  );
+
   it.effect("returns unavailable status when no JSON object is present", () =>
     Effect.gen(function* () {
       const resolved = yield* VSCodeTunnel.resolveVSCodeTunnel({

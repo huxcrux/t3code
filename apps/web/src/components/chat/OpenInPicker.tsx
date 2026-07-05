@@ -4,7 +4,7 @@ import {
   type ResolvedKeybindingsConfig,
   type ServerVSCodeTunnel,
 } from "@t3tools/contracts";
-import { memo, useCallback, useEffect, useMemo } from "react";
+import { memo, useCallback, useEffect, useMemo, useState } from "react";
 import { isOpenFavoriteEditorShortcut, shortcutLabelForCommand } from "../../keybindings";
 import { usePreferredEditor } from "../../editorPreferences";
 import { ChevronDownIcon, FolderClosedIcon } from "lucide-react";
@@ -40,6 +40,7 @@ import { isMacPlatform, isWindowsPlatform } from "~/lib/utils";
 import { shellEnvironment } from "~/state/shell";
 import { useAtomCommand } from "~/state/use-atom-command";
 import { readLocalApi } from "~/localApi";
+import { stackedThreadToast, toastManager } from "../ui/toast";
 
 type EditorPickerOption = { label: string; Icon: Icon; value: EditorId };
 type VSCodeTunnelPickerOption = {
@@ -171,12 +172,14 @@ const resolveOptions = (platform: string, availableEditors: ReadonlyArray<Editor
 };
 
 function encodeVSCodeTunnelPath(cwd: string): string {
-  return cwd
-    .replaceAll("\\", "/")
+  const normalized = cwd.replaceAll("\\", "/");
+  const hasLeadingSlash = normalized.startsWith("/");
+  const encodedSegments = normalized
     .split("/")
-    .filter((segment, index) => index > 0 || segment.length > 0)
+    .filter((segment) => segment.length > 0)
     .map(encodeURIComponent)
     .join("/");
+  return hasLeadingSlash ? `/${encodedSegments}` : encodedSegments;
 }
 
 function buildVSCodeTunnelUrl(machineName: string, cwd: string): string {
@@ -210,6 +213,7 @@ export const OpenInPicker = memo(function OpenInPicker({
 }) {
   const openInEditorMutation = useAtomCommand(shellEnvironment.openInEditor, "open in editor");
   const [preferredEditor, setPreferredEditor] = usePreferredEditor(availableEditors);
+  const [preferVSCodeTunnel, setPreferVSCodeTunnel] = useState(false);
   const editorOptions = useMemo(
     () => resolveOptions(navigator.platform, availableEditors),
     [availableEditors],
@@ -231,20 +235,46 @@ export const OpenInPicker = memo(function OpenInPicker({
     [editorOptions, vscodeTunnelOption],
   );
   const primaryOption =
+    (preferVSCodeTunnel ? vscodeTunnelOption : null) ??
     editorOptions.find(({ value }) => value === preferredEditor) ??
     (editorOptions.length === 0 ? vscodeTunnelOption : null);
+
+  useEffect(() => {
+    if (!vscodeTunnelOption && preferVSCodeTunnel) {
+      setPreferVSCodeTunnel(false);
+    }
+  }, [preferVSCodeTunnel, vscodeTunnelOption]);
 
   const openOption = useCallback(
     (option: PickerOption | null) => {
       if (!openInCwd || !option) return;
       if (isVSCodeTunnelOption(option)) {
+        setPreferVSCodeTunnel(true);
         const url = openVSCodeRemoteTunnelsInDesktop
           ? buildVSCodeTunnelDesktopUrl(option.vscodeTunnel.machineName, openInCwd)
           : buildVSCodeTunnelUrl(option.vscodeTunnel.machineName, openInCwd);
-        return readLocalApi()?.shell.openExternal(url);
+        const localApi = readLocalApi();
+        if (!localApi) {
+          toastManager.add({
+            type: "error",
+            title: "Link opening is unavailable.",
+          });
+          return;
+        }
+        void localApi.shell.openExternal(url).catch((error) => {
+          toastManager.add(
+            stackedThreadToast({
+              type: "error",
+              title: "Unable to open tunnel link",
+              description: error instanceof Error ? error.message : "An error occurred.",
+            }),
+          );
+        });
+        return;
       }
 
       const editor = option.value;
+      setPreferVSCodeTunnel(false);
       const result = openInEditorMutation({
         environmentId,
         input: {

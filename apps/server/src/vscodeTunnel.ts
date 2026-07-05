@@ -10,10 +10,12 @@ const VSCODE_TUNNEL_STATUS_TIMEOUT = Duration.millis(1_500);
 
 const VSCodeTunnelStatusJson = Schema.Struct({
   tunnel: Schema.optional(
-    Schema.Struct({
-      name: Schema.optional(Schema.String),
-      tunnel: Schema.optional(Schema.String),
-    }),
+    Schema.NullOr(
+      Schema.Struct({
+        name: Schema.optional(Schema.String),
+        tunnel: Schema.optional(Schema.String),
+      }),
+    ),
   ),
   service_installed: Schema.optional(Schema.Boolean),
 });
@@ -24,16 +26,13 @@ const decodeVSCodeTunnelStatusJson = Schema.decodeUnknownOption(
 
 function extractVSCodeTunnelStatusJson(stdout: string): string {
   const trimmed = stdout.trim();
-  const start = trimmed.indexOf("{");
-  if (start < 0) {
-    return trimmed;
-  }
-
+  let start = -1;
   let depth = 0;
   let inString = false;
   let escaped = false;
+  const candidates: Array<string> = [];
 
-  for (let index = start; index < trimmed.length; index += 1) {
+  for (let index = 0; index < trimmed.length; index += 1) {
     const char = trimmed[index];
     if (char === undefined) break;
 
@@ -58,19 +57,39 @@ function extractVSCodeTunnelStatusJson(stdout: string): string {
     }
 
     if (char === "{") {
+      if (depth === 0) {
+        start = index;
+      }
       depth += 1;
       continue;
     }
 
     if (char === "}") {
       depth -= 1;
-      if (depth === 0) {
-        return trimmed.slice(start, index + 1);
+      if (depth === 0 && start >= 0) {
+        candidates.push(trimmed.slice(start, index + 1));
+        start = -1;
       }
     }
   }
 
-  return trimmed.slice(start);
+  for (const candidate of candidates) {
+    try {
+      const parsed = JSON.parse(candidate);
+      if (
+        typeof parsed === "object" &&
+        parsed !== null &&
+        (Object.prototype.hasOwnProperty.call(parsed, "tunnel") ||
+          Object.prototype.hasOwnProperty.call(parsed, "service_installed"))
+      ) {
+        return candidate;
+      }
+    } catch {
+      // Ignore invalid JSON fragments and continue scanning.
+    }
+  }
+
+  return candidates[0] ?? trimmed;
 }
 
 const UNCHECKED_STATUS: ServerVSCodeTunnelStatus = {

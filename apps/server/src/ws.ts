@@ -1830,19 +1830,26 @@ const makeWsRpcLayer = (
                         ServerSettings.redactServerSettingsForClient(settings),
                       ),
                       Effect.flatMap(toVSCodeTunnelUpdateEvent),
-                      Effect.map((event) => Option.some(event)),
                       Effect.catchCause((cause) =>
                         Effect.logWarning("failed to refresh VS Code tunnel settings", {
                           cause,
-                        }).pipe(Effect.as(Option.none<ServerConfigStreamEvent>())),
+                        }).pipe(
+                          Effect.as({
+                            version: 1 as const,
+                            type: "vscodeTunnelUpdated" as const,
+                            payload: {
+                              vscodeTunnel: null,
+                              vscodeTunnelStatus: {
+                                checked: true,
+                                connected: false,
+                                machineName: null,
+                                serviceInstalled: null,
+                              },
+                            },
+                          }),
+                        ),
                       ),
                     ),
-                  ),
-                  Stream.flatMap((event) =>
-                    Option.match(event, {
-                      onNone: () => Stream.empty,
-                      onSome: (resolvedEvent) => Stream.make(resolvedEvent),
-                    }),
                   ),
                 );
 
