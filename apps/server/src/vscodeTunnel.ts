@@ -65,6 +65,9 @@ function extractVSCodeTunnelStatusJson(stdout: string): string {
     }
 
     if (char === "}") {
+      if (depth === 0) {
+        continue;
+      }
       depth -= 1;
       if (depth === 0 && start >= 0) {
         candidates.push(trimmed.slice(start, index + 1));
@@ -89,7 +92,7 @@ function extractVSCodeTunnelStatusJson(stdout: string): string {
     }
   }
 
-  return candidates[0] ?? trimmed;
+  return "";
 }
 
 const UNCHECKED_STATUS: ServerVSCodeTunnelStatus = {

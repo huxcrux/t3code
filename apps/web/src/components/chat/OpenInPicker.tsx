@@ -249,27 +249,33 @@ export const OpenInPicker = memo(function OpenInPicker({
     (option: PickerOption | null) => {
       if (!openInCwd || !option) return;
       if (isVSCodeTunnelOption(option)) {
-        setPreferVSCodeTunnel(true);
         const url = openVSCodeRemoteTunnelsInDesktop
           ? buildVSCodeTunnelDesktopUrl(option.vscodeTunnel.machineName, openInCwd)
           : buildVSCodeTunnelUrl(option.vscodeTunnel.machineName, openInCwd);
         const localApi = readLocalApi();
         if (!localApi) {
+          setPreferVSCodeTunnel(false);
           toastManager.add({
             type: "error",
             title: "Link opening is unavailable.",
           });
           return;
         }
-        void localApi.shell.openExternal(url).catch((error) => {
-          toastManager.add(
-            stackedThreadToast({
-              type: "error",
-              title: "Unable to open tunnel link",
-              description: error instanceof Error ? error.message : "An error occurred.",
-            }),
-          );
-        });
+        void localApi.shell
+          .openExternal(url)
+          .then(() => {
+            setPreferVSCodeTunnel(true);
+          })
+          .catch((error) => {
+            setPreferVSCodeTunnel(false);
+            toastManager.add(
+              stackedThreadToast({
+                type: "error",
+                title: "Unable to open tunnel link",
+                description: error instanceof Error ? error.message : "An error occurred.",
+              }),
+            );
+          });
         return;
       }
 
