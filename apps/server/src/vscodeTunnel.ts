@@ -22,6 +22,16 @@ const decodeVSCodeTunnelStatusJson = Schema.decodeUnknownOption(
   Schema.fromJsonString(VSCodeTunnelStatusJson),
 );
 
+function extractVSCodeTunnelStatusJson(stdout: string): string {
+  const trimmed = stdout.trim();
+  const jsonLine =
+    trimmed
+      .split(/\r?\n/)
+      .find((line) => line.trim().startsWith("{"))
+      ?.trim() ?? "";
+  return jsonLine || trimmed;
+}
+
 const UNCHECKED_STATUS: ServerVSCodeTunnelStatus = {
   checked: false,
   connected: false,
@@ -77,7 +87,7 @@ export const resolveVSCodeTunnel = Effect.fn("vscodeTunnel.resolve")(function* (
     } satisfies ResolvedVSCodeTunnel;
   }
 
-  const decoded = decodeVSCodeTunnelStatusJson(output.stdout.trim());
+  const decoded = decodeVSCodeTunnelStatusJson(extractVSCodeTunnelStatusJson(output.stdout));
   if (Option.isNone(decoded)) {
     return {
       tunnel: null,
