@@ -4,7 +4,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { ProcessRunner } from "./processRunner.ts";
+import * as ProcessRunner from "./processRunner.ts";
 
 const VSCODE_TUNNEL_STATUS_TIMEOUT = Duration.millis(1_500);
 
@@ -43,16 +43,15 @@ export interface ResolvedVSCodeTunnel {
 
 export const resolveVSCodeTunnel = Effect.fn("vscodeTunnel.resolve")(function* (input: {
   readonly enabled: boolean;
-  readonly networkAccessEnabled: boolean;
 }) {
-  if (!input.enabled || !input.networkAccessEnabled) {
+  if (!input.enabled) {
     return {
       tunnel: null,
       status: UNCHECKED_STATUS,
     } satisfies ResolvedVSCodeTunnel;
   }
 
-  const runner = yield* ProcessRunner;
+  const runner = yield* ProcessRunner.ProcessRunner;
   const result = yield* runner
     .run({
       command: "code",

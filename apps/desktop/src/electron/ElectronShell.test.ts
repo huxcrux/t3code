@@ -62,6 +62,16 @@ describe("ElectronShell", () => {
     }).pipe(Effect.provide(ElectronShell.layer)),
   );
 
+  it.effect("does not open non-tunnel VS Code URLs", () =>
+    Effect.gen(function* () {
+      const electronShell = yield* ElectronShell.ElectronShell;
+      const result = yield* electronShell.openExternal("vscode://file/etc/passwd");
+
+      assert.equal(result, false);
+      assert.equal(openExternalMock.mock.calls.length, 0);
+    }).pipe(Effect.provide(ElectronShell.layer)),
+  );
+
   it.effect("returns false when Electron rejects openExternal", () =>
     Effect.gen(function* () {
       openExternalMock.mockRejectedValue(new Error("open failed"));

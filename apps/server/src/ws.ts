@@ -116,7 +116,6 @@ import * as VcsProcess from "./vcs/VcsProcess.ts";
 import * as PairingGrantStore from "./auth/PairingGrantStore.ts";
 import * as SessionStore from "./auth/SessionStore.ts";
 import { failEnvironmentAuthInvalid, failEnvironmentInternal } from "./auth/http.ts";
-import { isLoopbackHost, isWildcardHost } from "./startupAccess.ts";
 import * as RelayClient from "@t3tools/shared/relayClient";
 const isOrchestrationDispatchCommandError = Schema.is(OrchestrationDispatchCommandError);
 
@@ -911,14 +910,9 @@ const makeWsRpcLayer = (
           );
       };
 
-      const networkAccessEnabled =
-        config.tailscaleServeEnabled ||
-        (config.host !== undefined &&
-          (isWildcardHost(config.host) || !isLoopbackHost(config.host)));
       const resolveVSCodeTunnelForSettings = (settings: { enableVSCodeRemoteTunnels: boolean }) =>
         VSCodeTunnel.resolveVSCodeTunnel({
           enabled: settings.enableVSCodeRemoteTunnels,
-          networkAccessEnabled,
         });
 
       const loadServerConfig = Effect.gen(function* () {
