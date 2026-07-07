@@ -614,7 +614,7 @@ export function runtimeEventToActivities(
     }
 
     case "content.delta": {
-      if (event.payload.delta.trim().length === 0) {
+      if (event.payload.delta.length === 0) {
         return [];
       }
       if (

@@ -1073,6 +1073,15 @@ const make = Effect.gen(function* () {
         ...(event.payload.titleSeed !== undefined ? { titleSeed: event.payload.titleSeed } : {}),
       };
 
+      yield* firstTurnAuxiliaryWorker.enqueue(
+        maybeGenerateAndRenameWorktreeBranchForFirstTurn({
+          threadId: event.payload.threadId,
+          branch: thread.branch,
+          worktreePath: thread.worktreePath,
+          ...generationInput,
+        }),
+      );
+
       if (canReplaceThreadTitle(thread.title, event.payload.titleSeed, message.text)) {
         yield* firstTurnAuxiliaryWorker.enqueue(
           maybeGenerateThreadTitleForFirstTurn({
@@ -1082,15 +1091,6 @@ const make = Effect.gen(function* () {
           }),
         );
       }
-
-      yield* firstTurnAuxiliaryWorker.enqueue(
-        maybeGenerateAndRenameWorktreeBranchForFirstTurn({
-          threadId: event.payload.threadId,
-          branch: thread.branch,
-          worktreePath: thread.worktreePath,
-          ...generationInput,
-        }),
-      );
     }
 
     const handleTurnStartFailure = (cause: Cause.Cause<unknown>) => {
