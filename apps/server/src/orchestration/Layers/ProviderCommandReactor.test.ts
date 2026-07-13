@@ -816,7 +816,7 @@ describe("ProviderCommandReactor", () => {
     expect(thread?.title).toBe(seededTitle);
   });
 
-  it("generates a Copilot thread title while starting the first Copilot turn", async () => {
+  it("keeps the client-seeded title while starting the first Copilot turn", async () => {
     const copilotSelection = createModelSelection(ProviderInstanceId.make("copilot"), "gpt-4.1");
     const harness = await createHarness({
       threadModelSelection: copilotSelection,
@@ -824,7 +824,6 @@ describe("ProviderCommandReactor", () => {
     });
     const now = "2026-01-01T00:00:00.000Z";
     const seededTitle = "Investigate Copilot thread startup";
-    harness.generateThreadTitle.mockReturnValue(Effect.succeed({ title: "Generated title" }));
 
     await harness.runEffect(
       harness.engine.dispatch({
@@ -856,10 +855,10 @@ describe("ProviderCommandReactor", () => {
     await waitFor(() => harness.sendTurn.mock.calls.length === 1);
     await harness.drain();
 
-    expect(harness.generateThreadTitle).toHaveBeenCalledOnce();
+    expect(harness.generateThreadTitle).not.toHaveBeenCalled();
     const readModel = await harness.readModel();
     const thread = readModel.threads.find((entry) => entry.id === ThreadId.make("thread-1"));
-    expect(thread?.title).toBe("Generated title");
+    expect(thread?.title).toBe(seededTitle);
   });
 
   it("regenerates a thread title from the current conversation", async () => {
