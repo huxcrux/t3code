@@ -151,6 +151,7 @@ import {
 import { newDraftId, newMessageId, newThreadId } from "~/lib/utils";
 import { getProviderModelCapabilities, resolveSelectableProvider } from "../providerModels";
 import { useEnvironmentSettings } from "../hooks/useSettings";
+import { canLaunchLocalEditors, resolveEditorSshTarget } from "../editorLaunchContext";
 import { resolveAppModelSelectionForInstance } from "../modelSelection";
 import { getTerminalFocusOwner } from "../lib/terminalFocus";
 import { resolveNewDraftStartFromOrigin } from "../lib/chatThreadActions";
@@ -183,11 +184,7 @@ import { selectThreadTerminalUiState, useTerminalUiStateStore } from "../termina
 import { useKnownTerminalSessions, useThreadRunningTerminalIds } from "../state/terminalSessions";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
-import {
-  primaryServerAvailableEditorsAtom,
-  primaryServerKeybindingsAtom,
-  serverEnvironment,
-} from "../state/server";
+import { primaryServerKeybindingsAtom, serverEnvironment } from "../state/server";
 import { terminalEnvironment } from "../state/terminal";
 import { threadEnvironment } from "../state/threads";
 import { vcsEnvironment } from "../state/vcs";
@@ -2121,7 +2118,27 @@ function ChatViewContent(props: ChatViewProps) {
         }),
   );
   const keybindings = useAtomValue(primaryServerKeybindingsAtom);
-  const availableEditors = useAtomValue(primaryServerAvailableEditorsAtom);
+  const localEditorContext =
+    activeEnvironment &&
+    canLaunchLocalEditors({
+      entry: activeEnvironment.entry,
+      isElectron,
+      locationHostname: window.location.hostname,
+    });
+  const availableEditors = localEditorContext ? (serverConfig?.availableEditors ?? []) : [];
+  const showRemoteEditors = !localEditorContext || settings.showRemoteEditorsForLocalTesting;
+  const editorSshTarget =
+    activeEnvironment && serverConfig
+      ? resolveEditorSshTarget({
+          entry: activeEnvironment.entry,
+          displayUrl: activeEnvironment.displayUrl,
+          locationHostname: window.location.hostname,
+          isElectron,
+          sshServerStatus: serverConfig.sshServerStatus,
+          sshAliasOverride: settings.editorSshAliases[activeEnvironment.environmentId] ?? null,
+          allowLocalTesting: settings.showRemoteEditorsForLocalTesting,
+        })
+      : null;
   // Prefer an instance-id match so a custom Codex instance (e.g.
   // `codex_personal`) surfaces its own status/message in the banner rather
   // than the default Codex's. Falls back to first-match-by-kind when no
@@ -5047,11 +5064,12 @@ function ChatViewContent(props: ChatViewProps) {
             }
             keybindings={keybindings}
             availableEditors={availableEditors}
+            sshTarget={editorSshTarget}
+            remotePlatform={serverConfig?.environment.platform ?? null}
             vscodeTunnel={
-              serverConfig?.settings.enableVSCodeRemoteTunnels ? serverConfig.vscodeTunnel : null
-            }
-            openVSCodeRemoteTunnelsInDesktop={
-              primaryEnvironment?.serverConfig?.settings.openVSCodeRemoteTunnelsInDesktop ?? false
+              showRemoteEditors && serverConfig?.settings.enableVSCodeRemoteTunnels
+                ? serverConfig.vscodeTunnel
+                : null
             }
             rightPanelOpen={rightPanelOpen}
             gitCwd={gitCwd}

@@ -11,8 +11,23 @@ function isSafeVSCodeTunnelUrl(url: URL): boolean {
   return (
     url.protocol === "vscode:" &&
     url.hostname === "vscode-remote" &&
-    url.pathname.startsWith("/tunnel+")
+    (url.pathname.startsWith("/tunnel+") || url.pathname.startsWith("/ssh-remote+"))
   );
+}
+
+function isSafeZedSshUrl(url: URL): boolean {
+  return url.protocol === "zed:" && url.hostname === "ssh" && url.pathname.length > 1;
+}
+
+function isSafeJetBrainsSshUrl(url: URL): boolean {
+  if (url.protocol !== "jetbrains-gateway:" || url.hostname !== "connect") return false;
+  const parameters = new URLSearchParams(url.hash.replace(/^#/u, ""));
+  const allowedKeys = new Set(["type", "host", "user", "port", "projectPath"]);
+  if ([...parameters.keys()].some((key) => !allowedKeys.has(key))) return false;
+  if (parameters.get("type") !== "ssh") return false;
+  if (!parameters.get("host")?.trim() || !parameters.get("projectPath")?.trim()) return false;
+  const port = parameters.get("port");
+  return port === null || (/^\d+$/u.test(port) && Number(port) > 0 && Number(port) <= 65_535);
 }
 
 export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
@@ -22,7 +37,10 @@ export function parseSafeExternalUrl(rawUrl: unknown): Option.Option<string> {
 
   try {
     const url = new URL(rawUrl);
-    return SAFE_EXTERNAL_PROTOCOLS.has(url.protocol) || isSafeVSCodeTunnelUrl(url)
+    return SAFE_EXTERNAL_PROTOCOLS.has(url.protocol) ||
+      isSafeVSCodeTunnelUrl(url) ||
+      isSafeZedSshUrl(url) ||
+      isSafeJetBrainsSshUrl(url)
       ? Option.some(url.href)
       : Option.none();
   } catch {

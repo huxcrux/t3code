@@ -130,6 +130,11 @@ const SERVER_CONFIG: ServerConfigType = {
     machineName: null,
     serviceInstalled: null,
   },
+  sshServerStatus: {
+    checked: false,
+    running: false,
+    port: 22,
+  },
   observability: {
     logsDirectoryPath: "/tmp/logs",
     localTracingEnabled: false,

@@ -98,6 +98,7 @@ import * as ProjectSetupScriptRunner from "./project/ProjectSetupScriptRunner.ts
 import * as RepositoryIdentityResolver from "./project/RepositoryIdentityResolver.ts";
 import * as ServerEnvironment from "./environment/ServerEnvironment.ts";
 import * as VSCodeTunnel from "./vscodeTunnel.ts";
+import * as SshServer from "./sshServer.ts";
 import * as EnvironmentAuth from "./auth/EnvironmentAuth.ts";
 import * as ProcessDiagnostics from "./diagnostics/ProcessDiagnostics.ts";
 import * as ProcessResourceMonitor from "./diagnostics/ProcessResourceMonitor.ts";
@@ -425,6 +426,7 @@ const makeWsRpcLayer = (
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
       const serverEnvironment = yield* ServerEnvironment.ServerEnvironment;
       const serverAuth = yield* EnvironmentAuth.EnvironmentAuth;
+      const sshServerDetector = yield* SshServer.SshServerDetector;
       const sourceControlDiscovery = yield* SourceControlDiscovery.SourceControlDiscovery;
       const automaticGitFetchInterval = serverSettings.getSettings.pipe(
         Effect.map((settings) => settings.automaticGitFetchInterval),
@@ -934,6 +936,7 @@ const makeWsRpcLayer = (
           availableEditors: yield* externalLauncher.resolveAvailableEditors(),
           vscodeTunnel: vscodeTunnel.tunnel,
           vscodeTunnelStatus: vscodeTunnel.status,
+          sshServerStatus: yield* sshServerDetector.getStatus,
           observability: {
             logsDirectoryPath: config.logsDir,
             localTracingEnabled: true,

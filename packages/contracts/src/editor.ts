@@ -44,6 +44,32 @@ export const EDITORS = [
 export const EditorId = Schema.Literals(EDITORS.map((e) => e.id));
 export type EditorId = typeof EditorId.Type;
 
+export const RemoteEditorId = Schema.Literals(["vscode", "jetbrains", "zed"]);
+export type RemoteEditorId = typeof RemoteEditorId.Type;
+
+export const RemoteEditorLaunchId = Schema.Literals([
+  "vscode-ssh",
+  "vscode-tunnel",
+  "jetbrains-ssh",
+  "zed-ssh",
+]);
+export type RemoteEditorLaunchId = typeof RemoteEditorLaunchId.Type;
+
+/**
+ * Client-local preference used to order the Open In picker. Local editor ids
+ * retain their existing stable values; remote entries include the transport so
+ * VS Code SSH and tunnel launches can be selected independently.
+ */
+export const EditorLaunchPreferenceId = Schema.Union([EditorId, RemoteEditorLaunchId]);
+export type EditorLaunchPreferenceId = typeof EditorLaunchPreferenceId.Type;
+
+export const RemoteEditorAvailability = Schema.Struct({
+  vscode: Schema.Boolean,
+  jetbrains: Schema.Boolean,
+  zed: Schema.Boolean,
+});
+export type RemoteEditorAvailability = typeof RemoteEditorAvailability.Type;
+
 export const LaunchEditorInput = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   editor: EditorId,

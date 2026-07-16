@@ -2,10 +2,11 @@ import * as Effect from "effect/Effect";
 import * as Duration from "effect/Duration";
 import * as Schema from "effect/Schema";
 import * as SchemaTransformation from "effect/SchemaTransformation";
-import { TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
+import { EnvironmentId, TrimmedNonEmptyString, TrimmedString } from "./baseSchemas.ts";
 import { DEFAULT_GIT_TEXT_GENERATION_MODEL, ProviderOptionSelections } from "./model.ts";
 import { ModelSelection } from "./orchestration.ts";
 import { ProviderInstanceConfig, ProviderInstanceId } from "./providerInstance.ts";
+import { EditorLaunchPreferenceId, RemoteEditorAvailability } from "./editor.ts";
 
 // ── Client Settings (local-only) ───────────────────────────────
 
@@ -72,6 +73,27 @@ export const ClientSettingsSchema = Schema.Struct({
       modelOrder: Schema.Array(Schema.String).pipe(Schema.withDecodingDefault(Effect.succeed([]))),
     }),
   ).pipe(Schema.withDecodingDefault(Effect.succeed({}))),
+  primaryEditor: Schema.NullOr(EditorLaunchPreferenceId).pipe(
+    Schema.withDecodingDefault(Effect.succeed(null)),
+  ),
+  remoteEditors: RemoteEditorAvailability.pipe(
+    Schema.withDecodingDefault(
+      Effect.succeed({
+        vscode: true,
+        jetbrains: true,
+        zed: true,
+      }),
+    ),
+  ),
+  showRemoteEditorsForLocalTesting: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  openVSCodeRemoteTunnelsInDesktop: Schema.Boolean.pipe(
+    Schema.withDecodingDefault(Effect.succeed(false)),
+  ),
+  editorSshAliases: Schema.Record(EnvironmentId, TrimmedNonEmptyString).pipe(
+    Schema.withDecodingDefault(Effect.succeed({})),
+  ),
   sidebarProjectGroupingMode: SidebarProjectGroupingMode.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SIDEBAR_PROJECT_GROUPING_MODE)),
   ),
@@ -367,9 +389,6 @@ export const ServerSettings = Schema.Struct({
   enableAssistantStreaming: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   enableProviderUpdateChecks: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
   enableVSCodeRemoteTunnels: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(true))),
-  openVSCodeRemoteTunnelsInDesktop: Schema.Boolean.pipe(
-    Schema.withDecodingDefault(Effect.succeed(false)),
-  ),
   automaticGitFetchInterval: Schema.DurationFromMillis.pipe(
     Schema.withDecodingDefault(
       Effect.succeed(Duration.toMillis(DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL)),
@@ -510,7 +529,6 @@ export const ServerSettingsPatch = Schema.Struct({
   enableAssistantStreaming: Schema.optionalKey(Schema.Boolean),
   enableProviderUpdateChecks: Schema.optionalKey(Schema.Boolean),
   enableVSCodeRemoteTunnels: Schema.optionalKey(Schema.Boolean),
-  openVSCodeRemoteTunnelsInDesktop: Schema.optionalKey(Schema.Boolean),
   automaticGitFetchInterval: Schema.optionalKey(Schema.DurationFromMillis),
   defaultThreadEnvMode: Schema.optionalKey(ThreadEnvMode),
   newWorktreesStartFromOrigin: Schema.optionalKey(Schema.Boolean),
@@ -565,6 +583,11 @@ export const ClientSettingsPatch = Schema.Struct({
       }),
     ),
   ),
+  primaryEditor: Schema.optionalKey(Schema.NullOr(EditorLaunchPreferenceId)),
+  remoteEditors: Schema.optionalKey(RemoteEditorAvailability),
+  showRemoteEditorsForLocalTesting: Schema.optionalKey(Schema.Boolean),
+  openVSCodeRemoteTunnelsInDesktop: Schema.optionalKey(Schema.Boolean),
+  editorSshAliases: Schema.optionalKey(Schema.Record(EnvironmentId, TrimmedNonEmptyString)),
   sidebarProjectGroupingMode: Schema.optionalKey(SidebarProjectGroupingMode),
   sidebarProjectGroupingOverrides: Schema.optionalKey(
     Schema.Record(TrimmedNonEmptyString, SidebarProjectGroupingMode),

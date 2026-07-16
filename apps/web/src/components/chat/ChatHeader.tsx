@@ -1,6 +1,8 @@
 import {
   type EnvironmentId,
+  type DesktopSshEnvironmentTarget,
   type EditorId,
+  type ExecutionEnvironmentPlatform,
   type ProjectScript,
   type ResolvedKeybindingsConfig,
   type ServerVSCodeTunnel,
@@ -16,7 +18,6 @@ import ProjectScriptsControl, {
   type ProjectScriptActionResult,
 } from "../ProjectScriptsControl";
 import { OpenInPicker } from "./OpenInPicker";
-import { usePrimaryEnvironmentId } from "../../state/environments";
 import { cn } from "~/lib/utils";
 
 interface ChatHeaderProps {
@@ -30,8 +31,9 @@ interface ChatHeaderProps {
   preferredScriptId: string | null;
   keybindings: ResolvedKeybindingsConfig;
   availableEditors: ReadonlyArray<EditorId>;
+  sshTarget: DesktopSshEnvironmentTarget | null;
+  remotePlatform: ExecutionEnvironmentPlatform | null;
   vscodeTunnel: ServerVSCodeTunnel | null;
-  openVSCodeRemoteTunnelsInDesktop: boolean;
   rightPanelOpen: boolean;
   gitCwd: string | null;
   onRunProjectScript: (script: ProjectScript) => void;
@@ -45,14 +47,9 @@ interface ChatHeaderProps {
 
 export function shouldShowOpenInPicker(input: {
   readonly activeProjectName: string | undefined;
-  readonly activeThreadEnvironmentId: EnvironmentId;
-  readonly primaryEnvironmentId: EnvironmentId | null;
+  readonly hasEditorOptions: boolean;
 }): boolean {
-  return (
-    Boolean(input.activeProjectName) &&
-    input.primaryEnvironmentId !== null &&
-    input.activeThreadEnvironmentId === input.primaryEnvironmentId
-  );
+  return Boolean(input.activeProjectName) && input.hasEditorOptions;
 }
 
 export const ChatHeader = memo(function ChatHeader({
@@ -66,8 +63,9 @@ export const ChatHeader = memo(function ChatHeader({
   preferredScriptId,
   keybindings,
   availableEditors,
+  sshTarget,
+  remotePlatform,
   vscodeTunnel,
-  openVSCodeRemoteTunnelsInDesktop,
   rightPanelOpen,
   gitCwd,
   onRunProjectScript,
@@ -75,15 +73,10 @@ export const ChatHeader = memo(function ChatHeader({
   onUpdateProjectScript,
   onDeleteProjectScript,
 }: ChatHeaderProps) {
-  const primaryEnvironmentId = usePrimaryEnvironmentId();
   const showOpenInPicker = shouldShowOpenInPicker({
     activeProjectName,
-    activeThreadEnvironmentId,
-    primaryEnvironmentId,
+    hasEditorOptions: availableEditors.length > 0 || sshTarget !== null || vscodeTunnel !== null,
   });
-  const showTunnelPicker = Boolean(
-    !showOpenInPicker && activeProjectName && vscodeTunnel && openInCwd,
-  );
   return (
     <div className="@container/header-actions flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
       <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden sm:gap-3">
@@ -119,14 +112,15 @@ export const ChatHeader = memo(function ChatHeader({
             onDeleteScript={onDeleteProjectScript}
           />
         )}
-        {(showOpenInPicker || showTunnelPicker) && (
+        {showOpenInPicker && (
           <OpenInPicker
             environmentId={activeThreadEnvironmentId}
             keybindings={keybindings}
-            availableEditors={showOpenInPicker ? availableEditors : []}
+            availableEditors={availableEditors}
             openInCwd={openInCwd}
+            sshTarget={sshTarget}
+            remotePlatform={remotePlatform}
             vscodeTunnel={vscodeTunnel}
-            openVSCodeRemoteTunnelsInDesktop={openVSCodeRemoteTunnelsInDesktop}
           />
         )}
         {activeProjectName && (

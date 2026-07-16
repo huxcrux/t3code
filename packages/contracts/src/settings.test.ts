@@ -31,6 +31,25 @@ describe("ClientSettings word wrap", () => {
   });
 });
 
+describe("ClientSettings editor preferences", () => {
+  it("defaults remote editors on while leaving the primary choice unset", () => {
+    const settings = decodeClientSettings({});
+    expect(settings.primaryEditor).toBeNull();
+    expect(settings.remoteEditors).toEqual({
+      vscode: true,
+      jetbrains: true,
+      zed: true,
+    });
+    expect(settings.showRemoteEditorsForLocalTesting).toBe(false);
+    expect(settings.openVSCodeRemoteTunnelsInDesktop).toBe(false);
+    expect(settings.editorSshAliases).toEqual({});
+  });
+
+  it("decodes a remote transport as the primary editor", () => {
+    expect(decodeClientSettings({ primaryEditor: "zed-ssh" }).primaryEditor).toBe("zed-ssh");
+  });
+});
+
 describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("defaults to an empty record so legacy configs without the key still decode", () => {
     expect(DEFAULT_SERVER_SETTINGS.providerInstances).toEqual({});

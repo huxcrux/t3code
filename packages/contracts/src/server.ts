@@ -419,11 +419,24 @@ export const ServerVSCodeTunnelStatus = Schema.Struct({
 });
 export type ServerVSCodeTunnelStatus = typeof ServerVSCodeTunnelStatus.Type;
 
+export const ServerSshServerStatus = Schema.Struct({
+  checked: Schema.Boolean,
+  running: Schema.Boolean,
+  port: Schema.Number,
+});
+export type ServerSshServerStatus = typeof ServerSshServerStatus.Type;
+
 const DEFAULT_SERVER_VSCODE_TUNNEL_STATUS: ServerVSCodeTunnelStatus = {
   checked: false,
   connected: false,
   machineName: null,
   serviceInstalled: null,
+};
+
+const DEFAULT_SERVER_SSH_SERVER_STATUS: ServerSshServerStatus = {
+  checked: false,
+  running: false,
+  port: 22,
 };
 
 export const ServerConfig = Schema.Struct({
@@ -440,6 +453,9 @@ export const ServerConfig = Schema.Struct({
   ),
   vscodeTunnelStatus: ServerVSCodeTunnelStatus.pipe(
     Schema.withDecodingDefault(Effect.succeed(DEFAULT_SERVER_VSCODE_TUNNEL_STATUS)),
+  ),
+  sshServerStatus: ServerSshServerStatus.pipe(
+    Schema.withDecodingDefault(Effect.succeed(DEFAULT_SERVER_SSH_SERVER_STATUS)),
   ),
   observability: ServerObservability,
   settings: ServerSettings,

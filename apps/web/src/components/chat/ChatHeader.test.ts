@@ -1,37 +1,22 @@
-import { EnvironmentId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
 import { shouldShowOpenInPicker } from "./ChatHeader";
 
 describe("shouldShowOpenInPicker", () => {
-  const primaryEnvironmentId = EnvironmentId.make("environment-primary");
-
-  it("shows the picker for projects in the primary environment", () => {
+  it("shows the picker when the active environment has an editor option", () => {
     expect(
       shouldShowOpenInPicker({
         activeProjectName: "codething-mvp",
-        activeThreadEnvironmentId: primaryEnvironmentId,
-        primaryEnvironmentId,
+        hasEditorOptions: true,
       }),
     ).toBe(true);
   });
 
-  it("hides the picker when hosted static mode has no primary environment", () => {
+  it("hides the picker when no editor options are available", () => {
     expect(
       shouldShowOpenInPicker({
         activeProjectName: "codething-mvp",
-        activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
-        primaryEnvironmentId: null,
-      }),
-    ).toBe(false);
-  });
-
-  it("hides the picker for remote environments", () => {
-    expect(
-      shouldShowOpenInPicker({
-        activeProjectName: "codething-mvp",
-        activeThreadEnvironmentId: EnvironmentId.make("environment-remote"),
-        primaryEnvironmentId,
+        hasEditorOptions: false,
       }),
     ).toBe(false);
   });
@@ -40,8 +25,7 @@ describe("shouldShowOpenInPicker", () => {
     expect(
       shouldShowOpenInPicker({
         activeProjectName: undefined,
-        activeThreadEnvironmentId: primaryEnvironmentId,
-        primaryEnvironmentId,
+        hasEditorOptions: true,
       }),
     ).toBe(false);
   });

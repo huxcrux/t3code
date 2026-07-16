@@ -20,6 +20,15 @@ const clientSettings: ClientSettings = {
   diffIgnoreWhitespace: true,
   favorites: [],
   providerModelPreferences: {},
+  primaryEditor: "vscode-ssh",
+  remoteEditors: {
+    vscode: true,
+    jetbrains: true,
+    zed: false,
+  },
+  showRemoteEditorsForLocalTesting: false,
+  openVSCodeRemoteTunnelsInDesktop: true,
+  editorSshAliases: {},
   sidebarProjectGroupingMode: "repository_path",
   sidebarProjectGroupingOverrides: {
     "environment-1:/tmp/project-a": "separate",
