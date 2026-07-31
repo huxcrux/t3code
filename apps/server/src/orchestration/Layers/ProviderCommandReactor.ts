@@ -1348,9 +1348,7 @@ const make = Effect.gen(function* () {
       }),
     );
 
-  const firstTurnAuxiliaryWorker = yield* makeDrainableWorker((job: Effect.Effect<void>) => job, {
-    concurrency: "unbounded",
-  });
+  const firstTurnAuxiliaryWorker = yield* makeDrainableWorker((job: Effect.Effect<void>) => job);
   const worker = yield* makeDrainableWorker(processDomainEventSafely);
 
   const start: ProviderCommandReactorShape["start"] = Effect.fn("start")(function* () {

@@ -218,7 +218,10 @@ describe("ProviderRuntimeIngestion", () => {
     }
   });
 
-  async function createHarness(options?: { serverSettings?: Partial<ServerSettings> }) {
+  async function createHarness(options?: {
+    serverSettings?: Partial<ServerSettings>;
+    initialThreadTitle?: string;
+  }) {
     const workspaceRoot = makeTempDir("t3-provider-project-");
     NodeFS.mkdirSync(NodePath.join(workspaceRoot, ".git"));
     const provider = createProviderServiceHarness();
@@ -272,7 +275,7 @@ describe("ProviderRuntimeIngestion", () => {
         commandId: CommandId.make("cmd-thread-create"),
         threadId: ThreadId.make("thread-1"),
         projectId: asProjectId("project-1"),
-        title: "Thread",
+        title: options?.initialThreadTitle ?? "Thread",
         modelSelection: {
           instanceId: ProviderInstanceId.make("codex"),
           model: "gpt-5-codex",
@@ -2759,7 +2762,7 @@ describe("ProviderRuntimeIngestion", () => {
   });
 
   it("consumes P1 runtime events into thread metadata, diff checkpoints, and activities", async () => {
-    const harness = await createHarness();
+    const harness = await createHarness({ initialThreadTitle: "New thread" });
     const now = "2026-01-01T00:00:00.000Z";
 
     harness.emit({
