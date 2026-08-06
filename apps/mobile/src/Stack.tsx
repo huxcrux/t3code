@@ -10,10 +10,12 @@ import {
   createNativeStackScreen,
   type NativeStackNavigationOptions,
 } from "@react-navigation/native-stack";
+import { useEffect, useRef } from "react";
 import { DynamicColorIOS, Platform, Pressable, ScrollView, StyleSheet } from "react-native";
 import { useResolveClassNames } from "uniwind";
 
 import { AppText as Text } from "./components/AppText";
+import { getCompactBrandHeaderOptions } from "./components/CompactBrandTitle";
 import { ArchivedThreadsRouteScreen } from "./features/archive/ArchivedThreadsRouteScreen";
 import { useAgentNotificationNavigation } from "./features/agent-awareness/notificationNavigation";
 import { ClerkSettingsSheetDetentProvider } from "./features/cloud/ClerkSettingsSheetDetent";
@@ -45,13 +47,20 @@ import { SettingsClientStorageRouteScreen } from "./features/settings/SettingsCl
 import { SettingsAuthRouteScreen } from "./features/settings/SettingsAuthRouteScreen";
 import { SettingsEnvironmentsRouteScreen } from "./features/settings/SettingsEnvironmentsRouteScreen";
 import { SettingsLegalRouteScreen } from "./features/settings/SettingsLegalRouteScreen";
+import { SettingsProjectGroupingRouteScreen } from "./features/settings/SettingsProjectGroupingRouteScreen";
 import { SettingsRouteScreen } from "./features/settings/SettingsRouteScreen";
-import { SettingsWaitlistRouteScreen } from "./features/settings/SettingsWaitlistRouteScreen";
+import { ShowcaseCaptureCoordinator } from "./features/showcase/ShowcaseCaptureCoordinator";
 import {
   SettingsLegalDocumentCloseHeaderButton,
   SettingsLegalDocumentExternalHeaderButton,
 } from "./features/settings/components/SettingsLegalDocumentRouteScreen";
 import { useAppShortcuts } from "./features/shortcuts/useAppShortcuts";
+import { useIncomingShare } from "./features/sharing/IncomingShareProvider";
+import {
+  EMPTY_INCOMING_SHARE_PRESENTATION_STATE,
+  transitionIncomingSharePresentation,
+} from "./features/sharing/incoming-share-presentation";
+import { NATIVE_LIQUID_GLASS_SUPPORTED } from "./native/native-glass";
 import { nativeHeaderScrollEdgeEffects } from "./native/StackHeader";
 import { useThreadOutboxDrain } from "./state/use-thread-outbox-drain";
 
@@ -71,19 +80,24 @@ type AppScreenOptions = NativeStackNavigationOptions & {
 // Shared header presets. Screens only override genuinely dynamic values (titles,
 // subtitles, toolbar items, search callbacks) via NativeStackScreenOptions.
 //
-// GLASS: transparent header over the screen's primary scroll view, with the iOS 26
-// scroll-edge blur sampling the content (Home, Thread, Files tree, settings sheet).
+// GLASS: transparent header over the screen's primary scroll view on supported
+// iOS versions. Pre-glass iOS gets the same solid material as internal-scroll
+// surfaces so content is laid out below the bar instead of underlapping it.
 const GLASS_HEADER_OPTIONS: AppScreenOptions = {
   headerBackButtonDisplayMode: "minimal",
   headerBackTitle: "",
   headerLargeTitle: false,
   headerShadowVisible: false,
   headerShown: true,
-  headerStyle: Platform.OS === "ios" ? { backgroundColor: "transparent" } : undefined,
+  headerStyle: NATIVE_LIQUID_GLASS_SUPPORTED
+    ? { backgroundColor: "transparent" }
+    : SHEET_BACKGROUND_COLOR !== undefined
+      ? { backgroundColor: SHEET_BACKGROUND_COLOR as unknown as string }
+      : undefined,
   headerTitleStyle: { fontSize: 18, fontWeight: "800" },
-  headerTransparent: Platform.OS === "ios",
-  scrollEdgeEffects: Platform.OS === "ios" ? HEADER_SCROLL_EDGE_EFFECTS : undefined,
-  unstable_navigationItemStyle: Platform.OS === "ios" ? "editor" : undefined,
+  headerTransparent: NATIVE_LIQUID_GLASS_SUPPORTED,
+  scrollEdgeEffects: NATIVE_LIQUID_GLASS_SUPPORTED ? HEADER_SCROLL_EDGE_EFFECTS : undefined,
+  unstable_navigationItemStyle: NATIVE_LIQUID_GLASS_SUPPORTED ? "editor" : undefined,
 };
 
 // SOLID: opaque sheet-colored header for surfaces whose content scrolls internally
@@ -162,6 +176,13 @@ const SettingsSheetStack = createNativeStackNavigator({
         title: "Appearance",
       },
     }),
+    SettingsProjectGrouping: createNativeStackScreen({
+      screen: SettingsProjectGroupingRouteScreen,
+      linking: "project-grouping",
+      options: {
+        title: "Project Grouping",
+      },
+    }),
     SettingsClientStorage: createNativeStackScreen({
       screen: SettingsClientStorageRouteScreen,
       linking: "client-storage",
@@ -177,10 +198,11 @@ const SettingsSheetStack = createNativeStackNavigator({
       },
     }),
     SettingsWaitlist: createNativeStackScreen({
-      screen: SettingsWaitlistRouteScreen,
+      // Keep the old deep link working after the Connect GA launch.
+      screen: SettingsAuthRouteScreen,
       linking: "waitlist",
       options: {
-        title: "Join the waitlist",
+        title: "Sign in",
       },
     }),
   },
@@ -271,16 +293,42 @@ function workspacePathFromState(state: NavigationState): string {
   return path.startsWith("/") ? path : `/${path}`;
 }
 
+// The drain hook subscribes to the outbox, all thread shells, projects, and
+// connection statuses. Hosting it in a null-rendering leaf keeps those
+// updates from re-rendering RootStackLayout (and with it every screen) on
+// each enqueue, shell change, or reconnect.
+function ThreadOutboxDrainWorker() {
+  useThreadOutboxDrain();
+  return null;
+}
+
 function RootStackLayout(props: {
   readonly children: React.ReactNode;
   readonly state: NavigationState;
 }) {
+  const navigation = useNavigation();
+  const { pendingShare } = useIncomingShare();
+  const sharePresentationRef = useRef(EMPTY_INCOMING_SHARE_PRESENTATION_STATE);
   useAgentNotificationNavigation();
-  useThreadOutboxDrain();
   // Presents the T3 Connect onboarding sheet after an in-session sign-in.
   useConnectOnboardingNavigation();
   // Launcher app shortcuts: routes shortcut taps and tracks opened threads.
   useAppShortcuts(props.state);
+  useEffect(() => {
+    const topRouteName = props.state.routes[props.state.index]?.name;
+    const transition = transitionIncomingSharePresentation(sharePresentationRef.current, {
+      isShareSheetPresented: topRouteName === "NewTaskSheet",
+      pendingShareId: pendingShare?.id ?? null,
+    });
+    sharePresentationRef.current = transition.state;
+    if (!transition.shareIdToPresent) {
+      return;
+    }
+    navigation.navigate("NewTaskSheet", {
+      screen: "NewTask",
+      params: { incomingShareId: transition.shareIdToPresent },
+    });
+  }, [navigation, pendingShare, props.state]);
   // Full pathname (sheets included) for keyboard-command scoping; the
   // workspace layout only reacts to the underlying non-overlay route.
   const path = getPathFromState(props.state, navigationPathConfig);
@@ -289,6 +337,8 @@ function RootStackLayout(props: {
 
   return (
     <HardwareKeyboardCommandProvider pathname={pathname}>
+      <ThreadOutboxDrainWorker />
+      <ShowcaseCaptureCoordinator pathname={pathname} />
       <ClerkSettingsSheetDetentProvider initiallyExpanded={false}>
         <AdaptiveWorkspaceLayout pathname={workspacePathname}>
           {props.children}
@@ -351,7 +401,7 @@ export const RootStack = createNativeStackNavigator({
         ...GLASS_HEADER_OPTIONS,
         contentStyle: { backgroundColor: "transparent" },
         headerBackVisible: false,
-        title: "Threads",
+        ...getCompactBrandHeaderOptions(),
       },
     }),
     Thread: createNativeStackScreen({
