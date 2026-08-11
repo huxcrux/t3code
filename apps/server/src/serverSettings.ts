@@ -133,10 +133,9 @@ export class ServerSettingsService extends Context.Service<
     readonly streamChanges: Stream.Stream<ServerSettings>;
 
     /**
-     * Acquire the settings change subscription synchronously and return a
-     * stream backed by it. Consumers that fork a long-running watcher should
-     * use this instead of `streamChanges` so a publish cannot land between
-     * scheduling the watcher fiber and the fiber subscribing.
+     * Acquire a settings change subscription synchronously in the current
+     * fiber. Use this before reading a snapshot when changes between the
+     * snapshot and a lazily started stream must not be lost.
      */
     readonly subscribeChanges: Effect.Effect<Stream.Stream<ServerSettings>, never, Scope.Scope>;
   }
@@ -190,24 +189,6 @@ function resolveTextGenerationProvider(settings: ServerSettings): ServerSettings
 }
 
 function fallbackTextGenerationProvider(settings: ServerSettings): ServerSettings {
-  const fallbackInstanceEntry = Object.entries(settings.providerInstances).find(
-    ([, instance]) => instance.enabled ?? true,
-  );
-  if (fallbackInstanceEntry) {
-    const [instanceId, instance] = fallbackInstanceEntry;
-    const driver = instance.driver;
-    return {
-      ...settings,
-      textGenerationModelSelection: {
-        instanceId: ProviderInstanceId.make(instanceId),
-        model:
-          DEFAULT_TEXT_GENERATION_MODEL_BY_PROVIDER[driver] ??
-          DEFAULT_MODEL_BY_PROVIDER[driver] ??
-          DEFAULT_TEXT_GENERATION_MODEL,
-      } satisfies ModelSelection,
-    };
-  }
-
   const fallbackEntry = Object.entries(settings.providers).find(([, provider]) => provider.enabled);
   const fallback = fallbackEntry ? ProviderDriverKind.make(fallbackEntry[0]) : undefined;
   if (!fallback) {
@@ -276,11 +257,7 @@ const make = Effect.gen(function* () {
   const secretStore = yield* ServerSecretStore.ServerSecretStore;
   const writeSemaphore = yield* Semaphore.make(1);
   const cacheKey = "settings" as const;
-  // Settings events are complete snapshots, so retaining only the latest
-  // value lets late subscribers catch up without replaying obsolete writes.
-  // In particular, this closes the gap between reading the initial settings
-  // and starting a change-stream consumer.
-  const changesPubSub = yield* PubSub.unbounded<ServerSettings>({ replay: 1 });
+  const changesPubSub = yield* PubSub.unbounded<ServerSettings>();
   const startedRef = yield* Ref.make(false);
   const startedDeferred = yield* Deferred.make<void, ServerSettingsError>();
   const watcherScope = yield* Scope.make("sequential");
