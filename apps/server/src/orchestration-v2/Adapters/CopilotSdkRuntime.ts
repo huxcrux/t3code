@@ -506,6 +506,10 @@ function permissionAutoApprovedByRuntimeMode(
   runtimeMode: ProviderSession["runtimeMode"],
   request: PermissionRequest,
 ): boolean {
+  if (request.managedApprovalRequired === true) {
+    return false;
+  }
+
   switch (runtimeMode) {
     case "full-access":
     case "auto":

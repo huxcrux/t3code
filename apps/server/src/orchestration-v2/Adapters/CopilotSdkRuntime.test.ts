@@ -226,6 +226,35 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
       }),
   );
 
+  it.effect("does not auto-approve managed bootstrap permission requests in full-access mode", () =>
+    Effect.gen(function* () {
+      runtimeMock.state.createSessionImpl = async (config: SessionConfig) => {
+        NodeAssert.ok(config.onPermissionRequest);
+        const result = await config.onPermissionRequest(
+          { kind: "shell", managedApprovalRequired: true } as PermissionRequest,
+          {
+            sessionId: runtimeMock.state.lastSession.sessionId,
+          },
+        );
+        NodeAssert.deepStrictEqual(result, { kind: "reject" });
+        return runtimeMock.state.lastSession as unknown as CopilotSession;
+      };
+
+      const adapter = yield* CopilotSdkRuntime;
+      const threadId = asThreadId("copilot-managed-bootstrap-permission-denied");
+
+      const session = yield* adapter.startSession({
+        provider: COPILOT_DRIVER,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "full-access",
+      });
+
+      NodeAssert.equal(session.provider, "copilot");
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("correlates bootstrap auto-approvals before replaying early permission events", () =>
     Effect.gen(function* () {
       const permissionRequest = {
