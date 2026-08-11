@@ -180,6 +180,22 @@ export function deriveProviderModelsForDisplay(input: {
   return [...serverModels, ...customModels];
 }
 
+export function providerAuthLabelParts(label: string | null | undefined): ReadonlyArray<{
+  readonly value: string;
+  readonly sensitive: boolean;
+}> {
+  return (
+    label
+      ?.split(" - ")
+      .map((part) => part.trim())
+      .filter((part) => part.length > 0)
+      .map((value) => ({
+        value,
+        sensitive: value.startsWith("@"),
+      })) ?? []
+  );
+}
+
 function ProviderAuthEmail(props: {
   readonly email: string | undefined;
   readonly prefix?: string;
@@ -198,6 +214,35 @@ function ProviderAuthEmail(props: {
         revealTooltip="Click to reveal email"
         hideTooltip="Click to hide email"
       />
+    </span>
+  );
+}
+
+function ProviderAuthLabel(props: {
+  readonly label: string | null | undefined;
+  readonly separator?: boolean;
+}) {
+  const parts = providerAuthLabelParts(props.label);
+  if (parts.length === 0) return null;
+
+  return (
+    <span className="inline-flex min-w-0 items-center gap-1.5">
+      {props.separator ? <span aria-hidden>·</span> : null}
+      {parts.map((part, index) => (
+        <span key={`${index}:${part.value}`} className="inline-flex min-w-0 items-center gap-1.5">
+          {index > 0 ? <span aria-hidden>-</span> : null}
+          {part.sensitive ? (
+            <RedactedSensitiveText
+              value={part.value}
+              ariaLabel="Toggle account username visibility"
+              revealTooltip="Click to reveal account username"
+              hideTooltip="Click to hide account username"
+            />
+          ) : (
+            <span>{part.value}</span>
+          )}
+        </span>
+      ))}
     </span>
   );
 }
@@ -499,11 +544,10 @@ export function ProviderInstanceCard({
   const statusStyle = PROVIDER_STATUS_STYLES[statusKey];
   const rawSummary = getProviderSummary(liveProvider);
   const authEmail = liveProvider?.auth.email;
-  const hasAuthenticatedEmail =
-    liveProvider?.auth.status === "authenticated" && Boolean(authEmail?.trim());
-  const authenticatedDetail = hasAuthenticatedEmail
-    ? (liveProvider?.auth.label ?? liveProvider?.auth.type ?? null)
-    : null;
+  const authLabel = liveProvider?.auth.label ?? liveProvider?.auth.type ?? null;
+  const isAuthenticated = liveProvider?.auth.status === "authenticated";
+  const hasAuthenticatedEmail = isAuthenticated && Boolean(authEmail?.trim());
+  const hasAuthenticatedLabel = isAuthenticated && Boolean(authLabel?.trim());
   const summary = rawSummary;
   const versionLabel = getProviderVersionLabel(liveProvider?.version);
   const versionAdvisory = getProviderVersionAdvisoryPresentation(liveProvider?.versionAdvisory);
@@ -702,7 +746,12 @@ export function ProviderInstanceCard({
         <>
           <span>Authenticated as</span>
           <ProviderAuthEmail email={authEmail} />
-          {authenticatedDetail ? <span>· {authenticatedDetail}</span> : null}
+          <ProviderAuthLabel label={authLabel} separator />
+        </>
+      ) : hasAuthenticatedLabel ? (
+        <>
+          <span>Authenticated</span>
+          <ProviderAuthLabel label={authLabel} separator />
         </>
       ) : (
         <>

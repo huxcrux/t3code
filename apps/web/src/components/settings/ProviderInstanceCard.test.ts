@@ -4,6 +4,7 @@ import type { ServerProviderModel } from "@t3tools/contracts";
 import {
   deriveProviderModelsForDisplay,
   nextProviderEnvironmentWithFieldValue,
+  providerAuthLabelParts,
   providerEnvironmentWithoutNames,
   readProviderEnvironmentVariable,
 } from "./ProviderInstanceCard";
@@ -37,6 +38,21 @@ describe("deriveProviderModelsForDisplay", () => {
         customModels: ["kept-custom"],
       }).map((model) => model.slug),
     ).toEqual(["server-model", "kept-custom"]);
+  });
+});
+
+describe("providerAuthLabelParts", () => {
+  it("marks account username segments as sensitive", () => {
+    expect(providerAuthLabelParts("@e164359_magh - github.com")).toEqual([
+      { value: "@e164359_magh", sensitive: true },
+      { value: "github.com", sensitive: false },
+    ]);
+  });
+
+  it("keeps non-username auth labels visible", () => {
+    expect(providerAuthLabelParts("zortos293 (via gh)")).toEqual([
+      { value: "zortos293 (via gh)", sensitive: false },
+    ]);
   });
 });
 
