@@ -342,24 +342,13 @@ export const CopilotSettings = makeProviderSettingsSchema(
         },
       }),
     ),
-    serverUrl: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
-      Schema.annotateKey({
-        title: "Server URL",
-        description: "External Copilot server URL. Leave blank to start the configured CLI.",
-        providerSettingsForm: {
-          placeholder: "http://127.0.0.1:4141",
-          clearWhenEmpty: "omit",
-        },
-      }),
-    ),
     customModels: Schema.Array(Schema.String).pipe(
       Schema.withDecodingDefault(Effect.succeed([])),
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
   },
   {
-    order: ["binaryPath", "serverUrl"],
+    order: ["binaryPath"],
   },
 );
 export type CopilotSettings = typeof CopilotSettings.Type;
@@ -757,7 +746,6 @@ const CodexSettingsPatch = Schema.Struct({
 const CopilotSettingsPatch = Schema.Struct({
   enabled: Schema.optionalKey(Schema.Boolean),
   binaryPath: Schema.optionalKey(TrimmedString),
-  serverUrl: Schema.optionalKey(TrimmedString),
   customModels: Schema.optionalKey(Schema.Array(Schema.String)),
 });
 

@@ -140,15 +140,11 @@ class CopilotCliPathResolutionError extends Schema.TaggedErrorClass<CopilotCliPa
   {
     detail: Schema.String,
     binaryPath: Schema.optional(Schema.String),
-    serverUrl: Schema.optional(Schema.String),
     cause: Schema.optional(Schema.Defect()),
   },
 ) {
   override get message(): string {
-    const context = [
-      this.binaryPath ? `binaryPath=${this.binaryPath}` : undefined,
-      this.serverUrl ? `serverUrl=${this.serverUrl}` : undefined,
-    ]
+    const context = [this.binaryPath ? `binaryPath=${this.binaryPath}` : undefined]
       .filter((part): part is string => part !== undefined)
       .join(", ");
     return `Copilot CLI path resolution failed${context ? ` (${context})` : ""}: ${this.detail}`;
@@ -164,9 +160,6 @@ function copilotClientConfigurationError(input: {
     detail: input.detail,
     ...(trimOrUndefined(input.settings.binaryPath)
       ? { binaryPath: trimOrUndefined(input.settings.binaryPath) }
-      : {}),
-    ...(trimOrUndefined(input.settings.serverUrl)
-      ? { serverUrl: trimOrUndefined(input.settings.serverUrl) }
       : {}),
     cause: input.cause,
   });
@@ -357,11 +350,6 @@ const validateConfiguredCopilotCliPath = Effect.fn("validateConfiguredCopilotCli
     readonly env?: Record<string, string | undefined>;
     readonly platform: NodeJS.Platform;
   }): Effect.fn.Return<string | undefined, CopilotCliPathResolutionError> {
-    const cliUrl = trimOrUndefined(input.settings.serverUrl);
-    if (cliUrl) {
-      return undefined;
-    }
-
     const cliPath = trimOrUndefined(input.settings.binaryPath);
     if (!cliPath) {
       return undefined;
@@ -396,29 +384,6 @@ export const buildCopilotClientOptions = Effect.fn("buildCopilotClientOptions")(
   readonly logLevel?: CopilotClientOptions["logLevel"];
   readonly onListModels?: CopilotClientOptions["onListModels"];
 }): Effect.fn.Return<CopilotClientOptions, CopilotCliPathResolutionError> {
-  const cliUrl = trimOrUndefined(input.settings.serverUrl);
-  if (cliUrl) {
-    const connection = yield* Effect.try({
-      try: () => {
-        if (!URL.canParse(cliUrl)) {
-          throw new TypeError("Invalid Copilot server URL.");
-        }
-        return RuntimeConnection.forUri(cliUrl);
-      },
-      catch: (cause) =>
-        copilotClientConfigurationError({
-          settings: input.settings,
-          detail: "The configured Copilot server URL is invalid.",
-          cause,
-        }),
-    });
-    return {
-      connection,
-      ...(input.logLevel ? { logLevel: input.logLevel } : {}),
-      ...(input.onListModels ? { onListModels: input.onListModels } : {}),
-    };
-  }
-
   const hostEnvironment = yield* HostProcessEnvironment;
   let env: Record<string, string | undefined> = { ...hostEnvironment };
 
@@ -439,7 +404,7 @@ export const buildCopilotClientOptions = Effect.fn("buildCopilotClientOptions")(
   });
   if (!configuredCliPath) {
     return yield* new CopilotCliPathResolutionError({
-      detail: "Configure a Copilot binary path or external Copilot server URL.",
+      detail: "Configure a Copilot binary path.",
     });
   }
 
@@ -649,29 +614,7 @@ export function formatCopilotProbeError(input: {
 } {
   const message = describeCopilotProbeCause(input.cause);
   const lower = message.toLowerCase();
-  const cliUrl = trimOrUndefined(input.settings.serverUrl);
   const cliPath = trimOrUndefined(input.settings.binaryPath);
-
-  if (cliUrl) {
-    if (
-      lower.includes("econnrefused") ||
-      lower.includes("enotfound") ||
-      lower.includes("fetch failed") ||
-      lower.includes("network") ||
-      lower.includes("timed out") ||
-      lower.includes("timeout")
-    ) {
-      return {
-        installed: true,
-        message: `Couldn't reach the configured Copilot server at ${cliUrl}. Check that it is running and the URL is correct.`,
-      };
-    }
-
-    return {
-      installed: true,
-      message: message || "Failed to connect to the configured Copilot server.",
-    };
-  }
 
   if (
     lower.includes("enoent") ||

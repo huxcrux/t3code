@@ -305,7 +305,6 @@ describe("ServerSettingsPatch string normalization", () => {
         },
         copilot: {
           binaryPath: "  /opt/homebrew/bin/copilot  ",
-          serverUrl: "  http://127.0.0.1:4141  ",
         },
       },
       providerInstances: {
@@ -324,7 +323,6 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(patch.providers?.codex?.homePath).toBe("~/.codex");
     expect(patch.providers?.codex?.launchArgs).toBe("--strict-config --enable foo");
     expect(patch.providers?.copilot?.binaryPath).toBe("/opt/homebrew/bin/copilot");
-    expect(patch.providers?.copilot?.serverUrl).toBe("http://127.0.0.1:4141");
     expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.driver).toBe(
       "codex",
     );

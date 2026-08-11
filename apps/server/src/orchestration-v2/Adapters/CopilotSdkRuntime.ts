@@ -61,7 +61,7 @@ import {
   stopCopilotClient,
   trimOrUndefined,
 } from "../../provider/copilotRuntime.ts";
-import { makeThreadLifecycleLock } from "../../provider/threadLifecycleLock.ts";
+import { makeCopilotThreadLifecycleLock } from "./CopilotThreadLifecycleLock.ts";
 import {
   classifyCopilotToolItemType,
   isReadOnlyCopilotToolName,
@@ -1277,7 +1277,7 @@ export const makeCopilotSdkRuntime = Effect.fn("makeCopilotSdkRuntime")(function
   const managedNativeEventLogger =
     options?.nativeEventLogger === undefined ? nativeEventLogger : undefined;
   const sessions = new Map<ThreadId, CopilotSessionContext>();
-  const lifecycleLock = yield* makeThreadLifecycleLock();
+  const lifecycleLock = yield* makeCopilotThreadLifecycleLock();
   const path = yield* Path.Path;
   const runtimeContext = yield* Effect.context();
   const runWithContext = Effect.runPromiseWith(runtimeContext);

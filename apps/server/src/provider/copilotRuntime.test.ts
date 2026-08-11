@@ -7,9 +7,7 @@ import * as NodePath from "node:path";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it } from "@effect/vitest";
 import type { CopilotClientOptions } from "@github/copilot-sdk";
-import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
-import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
 import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
@@ -18,11 +16,11 @@ import {
   authSnapshotFromCopilotSdk,
   buildCopilotClientOptions,
   capabilitiesFromCopilotModel,
-  createCopilotClient,
   formatCopilotProbeError,
   modelsFromCopilotSdk,
   normalizeCopilotRuntimeEnvironment,
   stopCopilotClient,
+  toCopilotProbeError,
 } from "./copilotRuntime.ts";
 
 function assertStdioConnection(connection: CopilotClientOptions["connection"]) {
@@ -105,104 +103,28 @@ describe("stopCopilotClient", () => {
 });
 
 describe("buildCopilotClientOptions", () => {
-  it.effect("only passes URI-compatible options to remote Copilot runtimes", () =>
-    Effect.gen(function* () {
-      const onListModels = () => [];
-      const options = yield* buildCopilotClientOptions({
-        settings: {
-          enabled: true,
-          binaryPath: "/ignored/copilot",
-          serverUrl: "http://127.0.0.1:4321",
-          customModels: [],
-        },
-        cwd: "/ignored/project",
-        baseDirectory: "/ignored/home",
-        env: { COPILOT_CLI_PATH: "/ignored/copilot" },
-        platform: "darwin",
-        logLevel: "error",
-        onListModels,
-      });
-
-      NodeAssert.deepEqual(options, {
-        connection: {
-          kind: "uri",
-          url: "http://127.0.0.1:4321",
-          connectionToken: undefined,
-        },
-        logLevel: "error",
-        onListModels,
-      });
-    }),
-  );
-
   it("leaves POSIX PATH hydration to the shared server environment setup", () => {
     const env = normalizeCopilotRuntimeEnvironment({ PATH: "/custom/bin:/bin" }, "darwin");
 
     NodeAssert.equal(env.PATH, "/custom/bin:/bin");
   });
 
-  it.effect("returns typed failures for invalid Copilot server URLs", () =>
-    Effect.gen(function* () {
-      const exit = yield* Effect.exit(
-        buildCopilotClientOptions({
-          settings: {
-            enabled: true,
-            binaryPath: "",
-            serverUrl: "http://[::1",
-            customModels: [],
-          },
-          platform: "darwin",
-        }),
-      );
+  it("formats Copilot probe failures from nested causes", () => {
+    const formatted = formatCopilotProbeError({
+      cause: toCopilotProbeError(new Error("spawn ENOENT")),
+      settings: {
+        enabled: true,
+        binaryPath: "/missing/copilot",
+        customModels: [],
+      },
+    });
 
-      NodeAssert.equal(Exit.isFailure(exit), true);
-      if (Exit.isFailure(exit)) {
-        const failure = Cause.squash(exit.cause);
-        const error = failure as {
-          readonly _tag?: string;
-          readonly detail?: string;
-          readonly serverUrl?: string;
-          readonly cause?: unknown;
-          readonly message?: string;
-        };
-        NodeAssert.equal(error._tag, "CopilotCliPathResolutionError");
-        NodeAssert.equal(error.detail, "The configured Copilot server URL is invalid.");
-        NodeAssert.equal(error.serverUrl, "http://[::1");
-        NodeAssert.ok(error.cause instanceof Error);
-        NodeAssert.equal(
-          error.message,
-          "Copilot CLI path resolution failed (serverUrl=http://[::1): The configured Copilot server URL is invalid.",
-        );
-      }
-    }),
-  );
-
-  it.effect("formats Copilot probe failures from nested causes", () =>
-    Effect.gen(function* () {
-      const error = yield* createCopilotClient({
-        settings: {
-          enabled: true,
-          binaryPath: "",
-          serverUrl: "http://[::1",
-          customModels: [],
-        },
-        platform: "darwin",
-      }).pipe(Effect.flip);
-
-      const formatted = formatCopilotProbeError({
-        cause: error,
-        settings: {
-          enabled: true,
-          binaryPath: "",
-          serverUrl: "http://[::1",
-          customModels: [],
-        },
-      });
-
-      NodeAssert.equal(formatted.installed, true);
-      NodeAssert.notEqual(formatted.message, "Failed to construct Copilot client.");
-    }),
-  );
+    NodeAssert.equal(formatted.installed, false);
+    NodeAssert.equal(
+      formatted.message,
+      "The configured Copilot binary could not be started: /missing/copilot.",
+    );
+  });
 
   it("normalizes and deduplicates built-in Copilot SDK model slugs", () => {
     const models = modelsFromCopilotSdk({
@@ -352,13 +274,12 @@ describe("buildCopilotClientOptions", () => {
   });
 
   it.layer(NodeServices.layer)("Copilot CLI command resolution", (it) => {
-    it.effect("requires a configured Copilot CLI path or external server URL", () =>
+    it.effect("requires a configured Copilot CLI path", () =>
       Effect.gen(function* () {
         const error = yield* buildCopilotClientOptions({
           settings: {
             enabled: true,
             binaryPath: "",
-            serverUrl: "",
             customModels: [],
           },
           cwd: "/tmp/project",
@@ -372,10 +293,7 @@ describe("buildCopilotClientOptions", () => {
           logLevel: "error",
         }).pipe(Effect.flip);
 
-        NodeAssert.equal(
-          error.detail,
-          "Configure a Copilot binary path or external Copilot server URL.",
-        );
+        NodeAssert.equal(error.detail, "Configure a Copilot binary path.");
       }),
     );
 
@@ -387,7 +305,6 @@ describe("buildCopilotClientOptions", () => {
           settings: {
             enabled: true,
             binaryPath: configuredBinaryPath,
-            serverUrl: "",
             customModels: [],
           },
           env: {
@@ -415,7 +332,6 @@ describe("buildCopilotClientOptions", () => {
           settings: {
             enabled: true,
             binaryPath: "copilot",
-            serverUrl: "",
             customModels: [],
           },
           cwd: "/tmp/project",
@@ -447,7 +363,6 @@ describe("buildCopilotClientOptions", () => {
           settings: {
             enabled: true,
             binaryPath: "./bin/copilot",
-            serverUrl: "",
             customModels: [],
           },
           cwd: workspaceDir,

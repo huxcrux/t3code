@@ -102,7 +102,6 @@ beforeEach(() => {
 const defaultCopilotSettings: CopilotSettings = {
   enabled: true,
   binaryPath: "",
-  serverUrl: "",
   customModels: [],
 };
 

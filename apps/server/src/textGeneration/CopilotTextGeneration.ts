@@ -103,7 +103,6 @@ function copilotTextClientKey(input: {
   return JSON.stringify({
     cwd: input.cwd,
     binaryPath: trimOrUndefined(input.settings.binaryPath) ?? null,
-    serverUrl: trimOrUndefined(input.settings.serverUrl) ?? null,
   });
 }
 
