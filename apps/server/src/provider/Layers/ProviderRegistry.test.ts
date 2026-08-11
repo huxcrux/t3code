@@ -1,7 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { describe, it, assert } from "@effect/vitest";
 import * as DateTime from "effect/DateTime";
-import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -312,12 +311,9 @@ function makeMutableServerSettingsService(
 ) {
   return Effect.gen(function* () {
     const settingsRef = yield* Ref.make(initial);
-    // Mirror ServerSettingsService: change events are full snapshots and the
-    // latest one is replayed to consumers that subscribe after a write.
-    const changes = yield* PubSub.unbounded<ContractServerSettings>({ replay: 1 });
-    const settingsWatcherSubscribed = yield* Deferred.make<void>();
+    const changes = yield* PubSub.unbounded<ContractServerSettings>();
 
-    const service = {
+    return {
       start: Effect.void,
       ready: Effect.void,
       getSettings: Ref.get(settingsRef),
@@ -335,15 +331,10 @@ function makeMutableServerSettingsService(
       },
       get subscribeChanges() {
         return PubSub.subscribe(changes).pipe(
-          Effect.tap(() => Deferred.succeed(settingsWatcherSubscribed, undefined)),
-          Effect.map(Stream.fromSubscription),
+          Effect.map((subscription) => Stream.fromSubscription(subscription)),
         );
       },
     } satisfies ServerSettingsModule.ServerSettingsService["Service"];
-
-    return Object.assign(service, {
-      settingsWatcherSubscribed: Deferred.await(settingsWatcherSubscribed),
-    });
   });
 }
 
@@ -1603,7 +1594,6 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
 
           yield* Effect.gen(function* () {
             const registry = yield* ProviderRegistry.ProviderRegistry;
-            yield* serverSettings.settingsWatcherSubscribed;
             // Boot-time probe: the default codex instance is enabled with
             // `firstMissing`, so the real spawner yields ENOENT and the
             // snapshot should be `status: "error"`.
