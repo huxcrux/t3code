@@ -473,9 +473,6 @@ importers:
       '@ff-labs/fff-node':
         specifier: 0.9.4
         version: 0.9.4(patch_hash=ab9ff544009e1891cfe3930105862d3699007f38922a79f3c98d90018deca368)
-      '@github/copilot':
-        specifier: 1.0.77
-        version: 1.0.77
       '@github/copilot-sdk':
         specifier: 1.0.8
         version: 1.0.8

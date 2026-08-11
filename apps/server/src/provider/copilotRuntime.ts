@@ -10,7 +10,6 @@ import {
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import * as NodeFS from "node:fs";
 import * as NodePath from "node:path";
-import * as NodeURL from "node:url";
 import type {
   CopilotSettings,
   ModelCapabilities,
@@ -20,7 +19,7 @@ import type {
   ServerProviderState,
 } from "@t3tools/contracts";
 import { ProviderDriverKind } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { createModelCapabilities, normalizeModelSlug } from "@t3tools/shared/model";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import * as Effect from "effect/Effect";
@@ -48,7 +47,6 @@ const GENERIC_EFFECT_TRY_PROMISE_MESSAGES = new Set([
   "An error occurred in Effect.try",
 ]);
 const COPILOT_CLI_PATH_ENV = "COPILOT_CLI_PATH";
-const COPILOT_CLI_COMMAND = "copilot";
 const COPILOT_FEATURE_FLAGS_ENV = "COPILOT_FEATURE_FLAGS";
 const COPILOT_SHELL_SPAWN_BACKEND_FLAG = "SHELL_SPAWN_BACKEND";
 const COPILOT_SHELL_SPAWN_BACKEND_EXP_ENV = "COPILOT_EXP_COPILOT_CLI_SHELL_SPAWN_BACKEND";
@@ -369,7 +367,7 @@ const validateConfiguredCopilotCliPath = Effect.fn("validateConfiguredCopilotCli
       return undefined;
     }
 
-    const env = input.env ?? process.env;
+    const env = input.env ?? (yield* HostProcessEnvironment);
     return yield* resolveCopilotCommandPath(cliPath, {
       env,
       platform: input.platform,
@@ -385,54 +383,6 @@ const validateConfiguredCopilotCliPath = Effect.fn("validateConfiguredCopilotCli
           ),
       }),
     );
-  },
-);
-
-function candidateDirectoryAncestors(directory: string): ReadonlyArray<string> {
-  const directories: string[] = [];
-  let current = directory;
-
-  for (let depth = 0; depth < 8; depth += 1) {
-    directories.push(current);
-    const parent = NodePath.dirname(current);
-    if (parent === current) {
-      break;
-    }
-    current = parent;
-  }
-
-  return directories;
-}
-
-export const resolveBundledCopilotCliPath = Effect.fn("resolveBundledCopilotCliPath")(
-  function* (input: {
-    readonly cwd?: string;
-    readonly env?: Record<string, string | undefined>;
-    readonly platform: NodeJS.Platform;
-  }): Effect.fn.Return<string | undefined> {
-    const moduleDirectory = NodePath.dirname(NodeURL.fileURLToPath(import.meta.url));
-    const candidateRoots = new Set<string>();
-
-    for (const directory of candidateDirectoryAncestors(moduleDirectory)) {
-      candidateRoots.add(directory);
-    }
-    if (input.cwd) {
-      candidateRoots.add(input.cwd);
-    }
-    candidateRoots.add(process.cwd());
-
-    for (const root of candidateRoots) {
-      const candidate = NodePath.join(root, "node_modules", ".bin", COPILOT_CLI_COMMAND);
-      const resolved = yield* resolveCopilotCommandPath(candidate, {
-        env: input.env ?? process.env,
-        platform: input.platform,
-      }).pipe(Effect.catchTags({ CommandResolutionError: () => Effect.void }));
-      if (resolved) {
-        return resolved;
-      }
-    }
-
-    return undefined;
   },
 );
 
@@ -469,7 +419,8 @@ export const buildCopilotClientOptions = Effect.fn("buildCopilotClientOptions")(
     };
   }
 
-  let env: Record<string, string | undefined> = { ...process.env };
+  const hostEnvironment = yield* HostProcessEnvironment;
+  let env: Record<string, string | undefined> = { ...hostEnvironment };
 
   if (input.env) {
     Object.assign(env, input.env);
@@ -486,17 +437,14 @@ export const buildCopilotClientOptions = Effect.fn("buildCopilotClientOptions")(
     env,
     platform: input.platform,
   });
-  const bundledCliPath = !configuredCliPath
-    ? yield* resolveBundledCopilotCliPath({
-        ...(input.cwd ? { cwd: input.cwd } : {}),
-        env,
-        platform: input.platform,
-      })
-    : undefined;
-  const cliPath = configuredCliPath ?? bundledCliPath;
+  if (!configuredCliPath) {
+    return yield* new CopilotCliPathResolutionError({
+      detail: "Configure a Copilot binary path or external Copilot server URL.",
+    });
+  }
 
   return {
-    ...(cliPath ? { connection: RuntimeConnection.forStdio({ path: cliPath }) } : {}),
+    connection: RuntimeConnection.forStdio({ path: configuredCliPath }),
     ...(input.cwd ? { workingDirectory: input.cwd } : {}),
     ...(input.baseDirectory ? { baseDirectory: input.baseDirectory } : {}),
     env,
@@ -521,7 +469,7 @@ function formatTokenCount(tokens: number): string {
 
 function formatContextTierLabel(label: string, tokens: number | undefined): string {
   return typeof tokens === "number" && Number.isFinite(tokens) && tokens > 0
-    ? `${label} (${formatTokenCount(tokens)} tokens)`
+    ? formatTokenCount(tokens)
     : label;
 }
 
@@ -596,6 +544,7 @@ export function capabilitiesFromCopilotModel(
             "Default",
             contextTierTokenBudgets.defaultContextPromptTokens,
           ),
+          isDefault: true,
         },
         {
           id: "long_context",

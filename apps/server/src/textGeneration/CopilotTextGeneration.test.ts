@@ -5,7 +5,6 @@ import { createModelSelection } from "@t3tools/shared/model";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
-import * as TestClock from "effect/testing/TestClock";
 import { vi } from "vite-plus/test";
 
 import { ServerConfig } from "../config.ts";
@@ -29,7 +28,6 @@ const runtimeMock = vi.hoisted(() => {
     }>,
     clientStartGate: null as Promise<void> | null,
     clientStartError: null as Error | null,
-    stopErrors: [] as Error[],
     responseContent: {
       subject: "Add change",
       body: "",
@@ -44,7 +42,6 @@ const runtimeMock = vi.hoisted(() => {
       state.sessions = [];
       state.clientStartGate = null;
       state.clientStartError = null;
-      state.stopErrors = [];
       state.responseContent = {
         subject: "Add change",
         body: "",
@@ -68,7 +65,7 @@ vi.mock("../provider/copilotRuntime.ts", async () => {
             throw runtimeMock.state.clientStartError;
           }
         });
-        const stop = vi.fn(async () => runtimeMock.state.stopErrors);
+        const stop = vi.fn(async () => []);
         const forceStop = vi.fn(async () => undefined);
         const createSession = vi.fn(async (config: unknown) => {
           runtimeMock.state.sessionConfigs.push(config);
@@ -305,28 +302,6 @@ it.layer(CopilotTextGenerationTestLayer)("CopilotTextGeneration", (it) => {
           infiniteSessions: { enabled: false },
         },
       ]);
-    }),
-  );
-
-  it.effect("force stops an idle shared client after incomplete graceful cleanup", () =>
-    Effect.gen(function* () {
-      const textGeneration = yield* makeCopilotTextGeneration(defaultCopilotSettings);
-      const modelSelection = createModelSelection(ProviderInstanceId.make("copilot"), "gpt-4.1");
-      runtimeMock.state.stopErrors = [new Error("text client cleanup failed")];
-
-      yield* textGeneration.generateCommitMessage({
-        cwd: process.cwd(),
-        branch: "feature/copilot-cleanup",
-        stagedSummary: "M README.md",
-        stagedPatch: "diff --git a/README.md b/README.md",
-        modelSelection,
-      });
-      yield* TestClock.adjust("30 seconds");
-      yield* Effect.yieldNow;
-
-      const client = runtimeMock.state.createdClients[0]?.client;
-      expect(client?.stop).toHaveBeenCalledOnce();
-      expect(client?.forceStop).toHaveBeenCalledOnce();
     }),
   );
 

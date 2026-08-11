@@ -332,13 +332,12 @@ export const CopilotSettings = makeProviderSettingsSchema(
       Schema.annotateKey({ providerSettingsForm: { hidden: true } }),
     ),
     binaryPath: TrimmedString.pipe(
-      Schema.withDecodingDefault(Effect.succeed("")),
+      Schema.withDecodingDefault(Effect.succeed("copilot")),
       Schema.annotateKey({
         title: "Binary path",
-        description:
-          "Optional path to a GitHub Copilot CLI binary. Leave blank to use the SDK-bundled CLI.",
+        description: "Path to an external GitHub Copilot CLI binary.",
         providerSettingsForm: {
-          placeholder: "Bundled Copilot CLI",
+          placeholder: "copilot",
           clearWhenEmpty: "omit",
         },
       }),
@@ -347,7 +346,7 @@ export const CopilotSettings = makeProviderSettingsSchema(
       Schema.withDecodingDefault(Effect.succeed("")),
       Schema.annotateKey({
         title: "Server URL",
-        description: "Leave blank to let T3 Code start the SDK-bundled Copilot server.",
+        description: "External Copilot server URL. Leave blank to start the configured CLI.",
         providerSettingsForm: {
           placeholder: "http://127.0.0.1:4141",
           clearWhenEmpty: "omit",

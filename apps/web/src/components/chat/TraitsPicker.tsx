@@ -90,6 +90,16 @@ function getDescriptorStringValue(
   return typeof value === "string" ? value : null;
 }
 
+function isDefaultSelectDescriptorValue(
+  descriptor: Extract<ProviderOptionDescriptor, { type: "select" }>,
+): boolean {
+  const currentValue = getProviderOptionCurrentValue(descriptor);
+  return (
+    typeof currentValue === "string" &&
+    descriptor.options.some((option) => option.id === currentValue && option.isDefault === true)
+  );
+}
+
 function getSelectedTraits(
   provider: ProviderDriverKind,
   models: ReadonlyArray<ServerProviderModel>,
@@ -423,6 +433,13 @@ export function buildTraitsTriggerDisplay(input: {
         fastModeEnabled = currentValue === fastTier.id;
         continue;
       }
+    }
+    if (
+      descriptor.type === "select" &&
+      CONTEXT_WINDOW_DESCRIPTOR_IDS.has(descriptor.id) &&
+      isDefaultSelectDescriptorValue(descriptor)
+    ) {
+      continue;
     }
     const label =
       input.ultrathinkPromptControlled && descriptor.id === input.primarySelectDescriptorId

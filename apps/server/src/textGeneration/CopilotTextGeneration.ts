@@ -34,10 +34,9 @@ import {
 } from "./TextGenerationPrompts.ts";
 import * as TextGeneration from "./TextGeneration.ts";
 import {
-  makeBranchNameGenerationResult,
-  makeCommitMessageGenerationResult,
-  makePrContentGenerationResult,
-  makeThreadTitleGenerationResult,
+  sanitizeCommitSubject,
+  sanitizePrTitle,
+  sanitizeThreadTitle,
   toJsonSchemaObject,
 } from "./TextGenerationUtils.ts";
 
@@ -474,11 +473,13 @@ export const makeCopilotTextGeneration = Effect.fn("makeCopilotTextGeneration")(
         modelSelection: input.modelSelection,
       });
 
-      return makeCommitMessageGenerationResult({
-        generated,
-        includeBranch: input.includeBranch === true,
-        sanitizeBranch: (branch) => sanitizeFeatureBranchName(sanitizeBranchFragment(branch)),
-      });
+      return {
+        subject: sanitizeCommitSubject(generated.subject),
+        body: generated.body.trim(),
+        ...("branch" in generated && typeof generated.branch === "string"
+          ? { branch: sanitizeFeatureBranchName(sanitizeBranchFragment(generated.branch)) }
+          : {}),
+      };
     });
 
   const generatePrContent: TextGeneration.TextGeneration["Service"]["generatePrContent"] =
@@ -498,7 +499,10 @@ export const makeCopilotTextGeneration = Effect.fn("makeCopilotTextGeneration")(
         modelSelection: input.modelSelection,
       });
 
-      return makePrContentGenerationResult(generated);
+      return {
+        title: sanitizePrTitle(generated.title),
+        body: generated.body.trim(),
+      };
     });
 
   const generateBranchName: TextGeneration.TextGeneration["Service"]["generateBranchName"] =
@@ -516,9 +520,9 @@ export const makeCopilotTextGeneration = Effect.fn("makeCopilotTextGeneration")(
         attachments: input.attachments,
       });
 
-      return makeBranchNameGenerationResult(generated, (branch) =>
-        sanitizeFeatureBranchName(sanitizeBranchFragment(branch)),
-      );
+      return {
+        branch: sanitizeFeatureBranchName(sanitizeBranchFragment(generated.branch)),
+      };
     });
 
   const generateThreadTitle: TextGeneration.TextGeneration["Service"]["generateThreadTitle"] =
@@ -536,7 +540,9 @@ export const makeCopilotTextGeneration = Effect.fn("makeCopilotTextGeneration")(
         attachments: input.attachments,
       });
 
-      return makeThreadTitleGenerationResult(generated);
+      return {
+        title: sanitizeThreadTitle(generated.title),
+      };
     });
 
   return {

@@ -199,19 +199,6 @@ describe("resolveSelectableProviderInstance", () => {
     expect(resolveSelectableProviderInstance(providers, disabled)).toBe(fallback);
   });
 
-  it("falls back from a removed custom Copilot instance to a selectable instance", () => {
-    const removed = ProviderInstanceId.make("copilot_work");
-    const fallback = ProviderInstanceId.make("copilot_personal");
-    const providers = [
-      provider({
-        provider: ProviderDriverKind.make("copilot"),
-        instanceId: fallback,
-      }),
-    ];
-
-    expect(resolveSelectableProviderInstance(providers, removed)).toBe(fallback);
-  });
-
   it("prefers a ready instance over an enabled one whose driver cannot start", () => {
     const notInstalled = ProviderInstanceId.make("codex");
     const ready = ProviderInstanceId.make("claudeAgent");

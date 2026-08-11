@@ -12,6 +12,7 @@ import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
 import * as TestClock from "effect/testing/TestClock";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 
 import {
   authSnapshotFromCopilotSdk,
@@ -21,7 +22,6 @@ import {
   formatCopilotProbeError,
   modelsFromCopilotSdk,
   normalizeCopilotRuntimeEnvironment,
-  resolveBundledCopilotCliPath,
   stopCopilotClient,
 } from "./copilotRuntime.ts";
 
@@ -275,8 +275,8 @@ describe("buildCopilotClientOptions", () => {
           label: "Context Window",
           type: "select",
           options: [
-            { id: "default", label: "Default (272K tokens)" },
-            { id: "long_context", label: "Long Context (1.05M tokens)" },
+            { id: "default", label: "272K", isDefault: true },
+            { id: "long_context", label: "1.05M" },
           ],
           currentValue: "default",
         },
@@ -352,48 +352,30 @@ describe("buildCopilotClientOptions", () => {
   });
 
   it.layer(NodeServices.layer)("Copilot CLI command resolution", (it) => {
-    it.effect(
-      "strips inherited COPILOT_CLI_PATH and uses the local Copilot CLI shim by default",
-      () =>
-        Effect.gen(function* () {
-          const options = yield* buildCopilotClientOptions({
-            settings: {
-              enabled: true,
-              binaryPath: "",
-              serverUrl: "",
-              customModels: [],
-            },
-            cwd: "/tmp/project",
-            baseDirectory: "/tmp/t3-copilot-home",
-            env: {
-              PATH: "/usr/bin",
-              COPILOT_CLI_PATH: "/opt/homebrew/bin/copilot",
-              GITHUB_TOKEN: "github-token",
-            },
-            platform: "darwin",
-            logLevel: "error",
-          });
-
-          const connection = assertStdioConnection(options.connection);
-          NodeAssert.ok(connection.path?.includes("node_modules/.bin/copilot"));
-          NodeAssert.equal(options.workingDirectory, "/tmp/project");
-          NodeAssert.equal(options.baseDirectory, "/tmp/t3-copilot-home");
-          NodeAssert.equal(options.logLevel, "error");
-          NodeAssert.equal(options.env?.COPILOT_CLI_PATH, undefined);
-          NodeAssert.equal(options.env?.GITHUB_TOKEN, "github-token");
-          NodeAssert.equal(options.env?.PATH, "/usr/bin");
-        }),
-    );
-
-    it.effect("resolves the bundled Copilot CLI shim without relying on PATH", () =>
+    it.effect("requires a configured Copilot CLI path or external server URL", () =>
       Effect.gen(function* () {
-        const cliPath = yield* resolveBundledCopilotCliPath({
+        const error = yield* buildCopilotClientOptions({
+          settings: {
+            enabled: true,
+            binaryPath: "",
+            serverUrl: "",
+            customModels: [],
+          },
           cwd: "/tmp/project",
-          env: { PATH: "/usr/bin" },
+          baseDirectory: "/tmp/t3-copilot-home",
+          env: {
+            PATH: "/usr/bin",
+            COPILOT_CLI_PATH: "/opt/homebrew/bin/copilot",
+            GITHUB_TOKEN: "github-token",
+          },
           platform: "darwin",
-        });
+          logLevel: "error",
+        }).pipe(Effect.flip);
 
-        NodeAssert.ok(cliPath?.includes("node_modules/.bin/copilot"));
+        NodeAssert.equal(
+          error.detail,
+          "Configure a Copilot binary path or external Copilot server URL.",
+        );
       }),
     );
 
@@ -420,11 +402,10 @@ describe("buildCopilotClientOptions", () => {
       }),
     );
 
-    it.effect("resolves configured relative binary paths from the binary path base directory", () =>
+    it.effect("resolves the default Copilot command from the host user PATH", () =>
       Effect.gen(function* () {
-        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "copilot-cli-base-"));
-        const workspaceDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "copilot-cli-cwd-"));
-        const binDir = NodePath.join(baseDir, "node_modules", ".bin");
+        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "copilot-user-path-"));
+        const binDir = NodePath.join(baseDir, "bin");
         NodeFS.mkdirSync(binDir, { recursive: true });
         const binaryPath = NodePath.join(binDir, "copilot");
         NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n");
@@ -433,7 +414,39 @@ describe("buildCopilotClientOptions", () => {
         const options = yield* buildCopilotClientOptions({
           settings: {
             enabled: true,
-            binaryPath: "./node_modules/.bin/copilot",
+            binaryPath: "copilot",
+            serverUrl: "",
+            customModels: [],
+          },
+          cwd: "/tmp/project",
+          platform: "darwin",
+        }).pipe(
+          Effect.provideService(HostProcessEnvironment, {
+            PATH: `${binDir}${NodePath.delimiter}/usr/bin`,
+          }),
+        );
+
+        const connection = assertStdioConnection(options.connection);
+        NodeAssert.equal(connection.path, binaryPath);
+        NodeAssert.equal(options.env?.PATH, `${binDir}${NodePath.delimiter}/usr/bin`);
+        NodeFS.rmSync(baseDir, { recursive: true, force: true });
+      }),
+    );
+
+    it.effect("resolves configured relative binary paths from the binary path base directory", () =>
+      Effect.gen(function* () {
+        const baseDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "copilot-cli-base-"));
+        const workspaceDir = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "copilot-cli-cwd-"));
+        const binDir = NodePath.join(baseDir, "bin");
+        NodeFS.mkdirSync(binDir, { recursive: true });
+        const binaryPath = NodePath.join(binDir, "copilot");
+        NodeFS.writeFileSync(binaryPath, "#!/bin/sh\nexit 0\n");
+        NodeFS.chmodSync(binaryPath, 0o755);
+
+        const options = yield* buildCopilotClientOptions({
+          settings: {
+            enabled: true,
+            binaryPath: "./bin/copilot",
             serverUrl: "",
             customModels: [],
           },

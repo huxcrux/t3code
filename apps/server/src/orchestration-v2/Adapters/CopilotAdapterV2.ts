@@ -25,7 +25,7 @@ import {
   type ThreadId,
   TurnId,
 } from "@t3tools/contracts";
-import { HostProcessPlatform } from "@t3tools/shared/hostProcess";
+import { HostProcessEnvironment, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import type * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -2256,6 +2256,7 @@ export const CopilotAdapterV2Driver: ProviderAdapterDriver<
       const serverConfig = yield* ServerConfig;
       const eventLoggers = yield* ProviderEventLoggers;
       const fileSystem = yield* FileSystem.FileSystem;
+      const hostEnvironment = yield* HostProcessEnvironment;
       const path = yield* Path.Path;
       const idAllocator = yield* IdAllocatorV2;
       const baseDirectory = path.join(
@@ -2270,7 +2271,7 @@ export const CopilotAdapterV2Driver: ProviderAdapterDriver<
         {
           instanceId: input.instanceId,
           baseDirectory,
-          environment: mergeProviderInstanceEnvironment(input.environment),
+          environment: mergeProviderInstanceEnvironment(input.environment, hostEnvironment),
           ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
         },
       );

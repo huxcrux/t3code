@@ -12,6 +12,7 @@
  * @module provider/Drivers/CopilotDriver
  */
 import { CopilotSettings, ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
+import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Path from "effect/Path";
@@ -78,7 +79,8 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
     Effect.gen(function* () {
       const serverConfig = yield* ServerConfig;
       const path = yield* Path.Path;
-      const processEnv = mergeProviderInstanceEnvironment(environment);
+      const hostEnvironment = yield* HostProcessEnvironment;
+      const processEnv = mergeProviderInstanceEnvironment(environment, hostEnvironment);
       const effectiveConfig = { ...config, enabled } satisfies CopilotSettings;
       const baseDirectory = path.join(serverConfig.stateDir, "providers", "copilot", instanceId);
       const continuationIdentity = defaultProviderContinuationIdentity({
@@ -93,7 +95,7 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
       });
       const maintenanceCapabilities = makeManualOnlyProviderMaintenanceCapabilities({
         provider: DRIVER_KIND,
-        packageName: "@github/copilot",
+        packageName: null,
       });
       const orchestrationAdapter = yield* CopilotAdapterV2Driver.create({
         instanceId,

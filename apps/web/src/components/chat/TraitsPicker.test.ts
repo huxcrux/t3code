@@ -27,7 +27,7 @@ const EFFORT = selectDescriptor(
 const CONTEXT_WINDOW = selectDescriptor(
   "contextWindow",
   [
-    { id: "200k", label: "200k" },
+    { id: "200k", label: "200k", isDefault: true },
     { id: "1m", label: "1M" },
   ],
   "1m",
@@ -56,6 +56,13 @@ describe("buildTraitsTriggerDisplay", () => {
     expect(display([EFFORT, fastModeDescriptor(true), CONTEXT_WINDOW])).toEqual({
       label: "High · 1M",
       showFastModeIcon: true,
+    });
+  });
+
+  it("omits default context windows from the trigger label", () => {
+    expect(display([EFFORT, { ...CONTEXT_WINDOW, currentValue: "200k" }])).toEqual({
+      label: "High",
+      showFastModeIcon: false,
     });
   });
 
