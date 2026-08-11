@@ -25,7 +25,6 @@ import { SqlError, classifySqliteError } from "effect/unstable/sql/SqlError";
 import * as Statement from "effect/unstable/sql/Statement";
 
 const ATTR_DB_SYSTEM_NAME = "db.system.name";
-const DEFAULT_BUSY_TIMEOUT_MS = 5_000;
 
 export const TypeId: TypeId = "~local/sqlite-node/SqliteClient";
 
@@ -35,7 +34,6 @@ export interface SqliteClientConfig {
   readonly filename: string;
   readonly readonly?: boolean | undefined;
   readonly allowExtension?: boolean | undefined;
-  readonly busyTimeoutMs?: number | undefined;
   readonly prepareCacheSize?: number | undefined;
   readonly prepareCacheTTL?: Duration.Input | undefined;
   readonly spanAttributes?: Record<string, unknown> | undefined;
@@ -113,17 +111,6 @@ const makeWithDatabase = Effect.fn("makeWithDatabase")(function* (
           reason: classifySqliteError(cause, {
             message: "Failed to open database",
             operation: "open",
-          }),
-        }),
-    });
-    const busyTimeoutMs = Math.max(0, Math.trunc(options.busyTimeoutMs ?? DEFAULT_BUSY_TIMEOUT_MS));
-    yield* Effect.try({
-      try: () => db.exec(`PRAGMA busy_timeout = ${busyTimeoutMs}`),
-      catch: (cause) =>
-        new SqlError({
-          reason: classifySqliteError(cause, {
-            message: "Failed to configure busy timeout",
-            operation: "execute",
           }),
         }),
     });
