@@ -34,15 +34,15 @@ import {
 
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
-import type { CopilotAdapterShape } from "../Services/CopilotAdapter.ts";
-import { type EventNdjsonLogger } from "./EventNdjsonLogger.ts";
-import { makeCopilotAdapter } from "./CopilotAdapter.ts";
+import type { CopilotSdkRuntimePort } from "./CopilotSdkRuntimeTypes.ts";
+import { type EventNdjsonLogger } from "../../provider/Layers/EventNdjsonLogger.ts";
+import { makeCopilotSdkRuntime } from "./CopilotSdkRuntime.ts";
 
 const decodeCopilotSettings = Schema.decodeSync(CopilotSettings);
 const encodeUnknownJson = Schema.encodeUnknownSync(Schema.fromJsonString(Schema.Unknown));
 
-class CopilotAdapter extends Context.Service<CopilotAdapter, CopilotAdapterShape>()(
-  "t3/provider/Layers/CopilotAdapter.test/CopilotAdapter",
+class CopilotSdkRuntime extends Context.Service<CopilotSdkRuntime, CopilotSdkRuntimePort>()(
+  "t3/orchestration-v2/Adapters/CopilotSdkRuntime.test/CopilotSdkRuntime",
 ) {}
 
 const asThreadId = (value: string): ThreadId => ThreadId.make(value);
@@ -116,9 +116,10 @@ const runtimeMock = vi.hoisted(() => {
   };
 });
 
-vi.mock("../copilotRuntime.ts", async () => {
-  const actual =
-    await vi.importActual<typeof import("../copilotRuntime.ts")>("../copilotRuntime.ts");
+vi.mock("../../provider/copilotRuntime.ts", async () => {
+  const actual = await vi.importActual<typeof import("../../provider/copilotRuntime.ts")>(
+    "../../provider/copilotRuntime.ts",
+  );
 
   return {
     ...actual,
@@ -181,9 +182,9 @@ function setMcpProviderSession(threadId: ThreadId, accessToken: string): void {
   });
 }
 
-const CopilotAdapterTestLayer = Layer.effect(
-  CopilotAdapter,
-  makeCopilotAdapter(decodeCopilotSettings({}), {
+const CopilotSdkRuntimeTestLayer = Layer.effect(
+  CopilotSdkRuntime,
+  makeCopilotSdkRuntime(decodeCopilotSettings({}), {
     nativeEventLogger,
     turnEndIdleFallbackDelayMs: 25,
   }),
@@ -196,7 +197,7 @@ const CopilotAdapterTestLayer = Layer.effect(
   Layer.provideMerge(NodeServices.layer),
 );
 
-it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
+it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
   it.effect(
     "denies bootstrap permission requests before the session context exists in approval-required mode",
     () =>
@@ -210,7 +211,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
           return runtimeMock.state.lastSession as unknown as CopilotSession;
         };
 
-        const adapter = yield* CopilotAdapter;
+        const adapter = yield* CopilotSdkRuntime;
         const threadId = asThreadId("copilot-bootstrap-permission-denied");
 
         const session = yield* adapter.startSession({
@@ -266,7 +267,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
         return runtimeMock.state.lastSession as unknown as CopilotSession;
       };
 
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-bootstrap-permission-correlation");
       yield* adapter.startSession({
         provider: COPILOT_DRIVER,
@@ -358,7 +359,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("maps correlated MCP lifecycle events without leaking auth secrets", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-mcp-event-mapping");
       const accessToken = "copilot-mcp-event-token-secret";
       const clientSecret = "copilot-mcp-client-secret";
@@ -579,7 +580,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("emits canonical answer maps for completed Copilot user input", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-user-input-canonical-answers");
 
       yield* adapter.startSession({
@@ -669,7 +670,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("coerces fixed-choice Copilot user input to an allowed answer", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-user-input-fixed-choice");
 
       yield* adapter.startSession({
@@ -723,7 +724,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("passes selected Copilot context tier when creating a session", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-start-session-context-tier");
 
       yield* adapter.startSession({
@@ -752,7 +753,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("maps Copilot auto-mode resolution and managed-settings enforcement", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-sdk-session-events");
 
       yield* adapter.startSession({
@@ -817,7 +818,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("denies plan execution and emits the proposed plan for fresh sessions", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-plan-exit-policy-create");
 
       yield* adapter.startSession({
@@ -907,7 +908,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
           `Request session.resume failed with message: Session not found: ${sessionId}`,
         );
       };
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-stale-resume-cursor");
 
       const session = yield* adapter.startSession({
@@ -987,7 +988,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
         } as SessionEvent,
       ]);
 
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-resumed-history-rollback");
       yield* adapter.startSession({
         provider: COPILOT_DRIVER,
@@ -1027,7 +1028,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("serializes rollback with SDK events and new sends", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-rollback-serialization");
 
       yield* adapter.startSession({
@@ -1148,7 +1149,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("keeps assistant call usage on the turn without publishing context usage", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-assistant-call-usage");
 
       yield* adapter.startSession({
@@ -1224,7 +1225,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("serializes each turn's model and mode through its SDK send", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-send-turn-configuration-serialization");
 
       yield* adapter.startSession({
@@ -1312,7 +1313,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("keeps an active session running while configuring a queued turn", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-queued-turn-configuration-state");
 
       yield* adapter.startSession({
@@ -1368,7 +1369,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("returns a session-scoped SDK approval for acceptForSession", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-permission-accept-for-session");
 
       yield* adapter.startSession({
@@ -1485,7 +1486,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("renders Copilot Task_complete output as assistant text instead of a tool call", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-task-complete-assistant-fallback");
 
       yield* adapter.startSession({
@@ -1689,7 +1690,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("only aborts the matching active Copilot turn", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-interrupt-sdk-abort-source");
 
       yield* adapter.startSession({
@@ -1800,7 +1801,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("completes an ended Copilot turn before attributing queued follow-up output", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-queued-follow-up-after-turn-end");
 
       yield* adapter.startSession({
@@ -1958,7 +1959,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("emits an active turn diff when a Copilot Apply_patch tool completes", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-apply-patch-turn-diff");
 
       yield* adapter.startSession({
@@ -2061,7 +2062,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("does not emit empty Copilot assistant messages around tool calls", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-empty-assistant-tool-call");
 
       yield* adapter.startSession({
@@ -2116,7 +2117,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
           turnId: "sdk-turn-empty-message",
           toolCallId: "tool-search-code",
           toolName: "Github-mcp-server-search_code",
-          arguments: { query: "CopilotAdapter" },
+          arguments: { query: "CopilotSdkRuntime" },
         },
       } as SessionEvent);
       yield* waitForSdkEventQueue();
@@ -2153,7 +2154,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("emits turn diff when a Copilot write permission is approved", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-write-permission-turn-diff");
 
       yield* adapter.startSession({
@@ -2273,7 +2274,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("prompts for shell permissions in auto-accept-edits mode", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-auto-accept-edits-shell-permission");
 
       yield* adapter.startSession({
@@ -2352,7 +2353,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("emits Copilot background task lifecycle events without plan updates", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-background-tasks-plan");
 
       yield* adapter.startSession({
@@ -2464,7 +2465,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("maps native Copilot subagent lifecycle and child turns", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-native-subagent-lifecycle");
 
       yield* adapter.startSession({
@@ -2505,7 +2506,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
           turnId: "sdk-root-turn",
           toolCallId: "spawn-native-agent",
           toolName: "delegate_agent",
-          arguments: { prompt: "Inspect CopilotAdapter" },
+          arguments: { prompt: "Inspect CopilotSdkRuntime" },
         },
       } as SessionEvent);
       emit({
@@ -2518,7 +2519,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
           toolCallId: "spawn-native-agent",
           agentName: "explore",
           agentDisplayName: "Explore",
-          agentDescription: "Inspect CopilotAdapter",
+          agentDescription: "Inspect CopilotSdkRuntime",
           model: "gpt-5",
         },
       } as SessionEvent);
@@ -2615,7 +2616,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
       NodeAssert.equal(taskStarted?.type, "task.started");
       if (taskStarted?.type === "task.started") {
         NodeAssert.equal(taskStarted.turnId, turn.turnId);
-        NodeAssert.equal(taskStarted.payload.description, "Inspect CopilotAdapter");
+        NodeAssert.equal(taskStarted.payload.description, "Inspect CopilotSdkRuntime");
       }
       const childProgress = runtimeEvents.filter(
         (event): event is Extract<ProviderRuntimeEvent, { readonly type: "task.progress" }> =>
@@ -2658,7 +2659,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("emits command metadata without unused reasoning or tool output deltas", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-command-metadata");
 
       yield* adapter.startSession({
@@ -2768,7 +2769,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
           toolCallId: "tool-command",
           success: true,
           result: {
-            content: " M apps/server/src/provider/Layers/CopilotAdapter.ts",
+            content: " M apps/server/src/orchestration-v2/Adapters/CopilotSdkRuntime.ts",
           },
         },
       } as SessionEvent);
@@ -2801,14 +2802,14 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
         NodeAssert.equal(completed.payload.title, "Ran command: git status --short");
         NodeAssert.equal(
           completed.payload.detail,
-          "M apps/server/src/provider/Layers/CopilotAdapter.ts",
+          "M apps/server/src/orchestration-v2/Adapters/CopilotSdkRuntime.ts",
         );
         NodeAssert.deepStrictEqual(completed.payload.data, {
           toolCallId: "tool-command",
           toolName: "bash",
           command: "git status --short",
           result: {
-            content: " M apps/server/src/provider/Layers/CopilotAdapter.ts",
+            content: " M apps/server/src/orchestration-v2/Adapters/CopilotSdkRuntime.ts",
           },
         });
       }
@@ -2824,7 +2825,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("emits and terminally fails non-eligible Copilot quota errors", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-session-error-completes-active-turn");
 
       yield* adapter.startSession({
@@ -2961,7 +2962,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("emits one canonical turn completion for duplicate Copilot lifecycle events", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-duplicate-lifecycle-completion");
 
       yield* adapter.startSession({
@@ -3052,7 +3053,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("keeps one T3 turn active across Copilot SDK loops until final output", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-multi-sdk-loop-before-idle");
 
       yield* adapter.startSession({
@@ -3199,7 +3200,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("does not complete a queued turn from the previous Copilot idle event", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-queued-turn-idle-correlation");
 
       yield* adapter.startSession({
@@ -3391,7 +3392,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("does not complete a successful tool turn when the assistant loop continues", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-successful-tool-continuation");
 
       yield* adapter.startSession({
@@ -3540,7 +3541,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("does not let timestamped sdk replay consume a freshly queued turn", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-timestamped-replay-does-not-steal-queue");
 
       yield* adapter.startSession({
@@ -3638,7 +3639,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("drains queued SDK events before disconnecting on stop", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-stop-drains-event-chain");
 
       yield* adapter.startSession({
@@ -3757,7 +3758,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("resolves open permission requests when stopping a session", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-stop-resolves-permission-request");
 
       yield* adapter.startSession({
@@ -3833,7 +3834,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("resolves open user input requests when stopping a session", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-stop-resolves-user-input");
 
       yield* adapter.startSession({
@@ -3910,7 +3911,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("completes the turn as failed when Copilot send rejects", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-send-failure-turn-completed");
 
       yield* adapter.startSession({
@@ -3957,7 +3958,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
 
   it.effect("preserves the active turn when a queued Copilot send rejects", () =>
     Effect.gen(function* () {
-      const adapter = yield* CopilotAdapter;
+      const adapter = yield* CopilotSdkRuntime;
       const threadId = asThreadId("copilot-queued-send-failure-preserves-active-turn");
 
       yield* adapter.startSession({

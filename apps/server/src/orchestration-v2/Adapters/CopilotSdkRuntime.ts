@@ -48,16 +48,20 @@ import { parseTurnDiffFilesFromUnifiedDiff } from "../../checkpointing/Diffs.ts"
 import { ServerConfig } from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
-  CopilotAdapterProcessError as ProviderAdapterProcessError,
-  CopilotAdapterRequestError as ProviderAdapterRequestError,
-  CopilotAdapterSessionClosedError as ProviderAdapterSessionClosedError,
-  CopilotAdapterSessionNotFoundError as ProviderAdapterSessionNotFoundError,
-  CopilotAdapterValidationError as ProviderAdapterValidationError,
-  type CopilotAdapterShape,
-} from "../Services/CopilotAdapter.ts";
-import { resolveCopilotMcpBearerAuth } from "../copilotMcpBearerAuth.ts";
-import { createCopilotClient, stopCopilotClient, trimOrUndefined } from "../copilotRuntime.ts";
-import { makeThreadLifecycleLock } from "../threadLifecycleLock.ts";
+  CopilotSdkRuntimeProcessError as ProviderAdapterProcessError,
+  CopilotSdkRuntimeRequestError as ProviderAdapterRequestError,
+  CopilotSdkRuntimeSessionClosedError as ProviderAdapterSessionClosedError,
+  CopilotSdkRuntimeSessionNotFoundError as ProviderAdapterSessionNotFoundError,
+  CopilotSdkRuntimeValidationError as ProviderAdapterValidationError,
+  type CopilotSdkRuntimePort,
+} from "./CopilotSdkRuntimeTypes.ts";
+import { resolveCopilotMcpBearerAuth } from "../../provider/copilotMcpBearerAuth.ts";
+import {
+  createCopilotClient,
+  stopCopilotClient,
+  trimOrUndefined,
+} from "../../provider/copilotRuntime.ts";
+import { makeThreadLifecycleLock } from "../../provider/threadLifecycleLock.ts";
 import {
   classifyCopilotToolItemType,
   isReadOnlyCopilotToolName,
@@ -70,7 +74,10 @@ import {
   hasUnifiedDiffShape,
   stripCopilotShellCompletionControlLines,
 } from "./CopilotPatchDetection.ts";
-import { type EventNdjsonLogger, makeEventNdjsonLogger } from "./EventNdjsonLogger.ts";
+import {
+  type EventNdjsonLogger,
+  makeEventNdjsonLogger,
+} from "../../provider/Layers/EventNdjsonLogger.ts";
 
 const PROVIDER = ProviderDriverKind.make("copilot");
 const COPILOT_RESUME_SCHEMA_VERSION = 1 as const;
@@ -105,7 +112,7 @@ interface CopilotTaskState {
   status: CopilotTaskStatus;
 }
 
-export interface CopilotAdapterLiveOptions {
+export interface CopilotSdkRuntimeOptions {
   readonly instanceId?: ProviderInstanceId;
   readonly environment?: NodeJS.ProcessEnv;
   readonly baseDirectory?: string;
@@ -1253,9 +1260,9 @@ function resolveTurnIdForEvent(
   return context.activeTurnId;
 }
 
-export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
+export const makeCopilotSdkRuntime = Effect.fn("makeCopilotSdkRuntime")(function* (
   settings: CopilotSettings,
-  options?: CopilotAdapterLiveOptions,
+  options?: CopilotSdkRuntimeOptions,
 ) {
   const boundInstanceId = options?.instanceId ?? ProviderInstanceId.make("copilot");
   const serverConfig = yield* ServerConfig;
@@ -3125,7 +3132,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     }
   };
 
-  const startSession: CopilotAdapterShape["startSession"] = Effect.fn("startSession")(
+  const startSession: CopilotSdkRuntimePort["startSession"] = Effect.fn("startSession")(
     function* (input) {
       if (input.provider !== undefined && input.provider !== PROVIDER) {
         return yield* new ProviderAdapterValidationError({
@@ -3377,10 +3384,10 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     },
   );
 
-  const startSessionWithLifecycleLock: CopilotAdapterShape["startSession"] = (input) =>
+  const startSessionWithLifecycleLock: CopilotSdkRuntimePort["startSession"] = (input) =>
     withLifecycleLock(input.threadId, startSession(input));
 
-  const sendTurn: CopilotAdapterShape["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
+  const sendTurn: CopilotSdkRuntimePort["sendTurn"] = Effect.fn("sendTurn")(function* (input) {
     const context = yield* requireSessionContext(sessions, input.threadId);
 
     const text = input.input?.trim();
@@ -3537,7 +3544,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     );
   });
 
-  const interruptTurn: CopilotAdapterShape["interruptTurn"] = Effect.fn("interruptTurn")(
+  const interruptTurn: CopilotSdkRuntimePort["interruptTurn"] = Effect.fn("interruptTurn")(
     function* (threadId, turnId) {
       const context = yield* requireSessionContext(sessions, threadId);
       if (context.activeTurnId === undefined) {
@@ -3551,7 +3558,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     },
   );
 
-  const respondToRequest: CopilotAdapterShape["respondToRequest"] = Effect.fn("respondToRequest")(
+  const respondToRequest: CopilotSdkRuntimePort["respondToRequest"] = Effect.fn("respondToRequest")(
     function* (threadId, requestId, decision) {
       const context = yield* requireSessionContext(sessions, threadId);
 
@@ -3606,7 +3613,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     },
   );
 
-  const respondToUserInput: CopilotAdapterShape["respondToUserInput"] = Effect.fn(
+  const respondToUserInput: CopilotSdkRuntimePort["respondToUserInput"] = Effect.fn(
     "respondToUserInput",
   )(function* (threadId, requestId, answers) {
     const context = yield* requireSessionContext(sessions, threadId);
@@ -3693,7 +3700,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
       );
     });
 
-  const stopSession: CopilotAdapterShape["stopSession"] = Effect.fn("stopSession")(
+  const stopSession: CopilotSdkRuntimePort["stopSession"] = Effect.fn("stopSession")(
     function* (threadId) {
       if (!sessions.has(threadId)) {
         return yield* new ProviderAdapterSessionNotFoundError({
@@ -3713,13 +3720,13 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     },
   );
 
-  const listSessions: CopilotAdapterShape["listSessions"] = () =>
+  const listSessions: CopilotSdkRuntimePort["listSessions"] = () =>
     Effect.sync(() => Array.from(sessions.values(), (context) => context.session));
 
-  const hasSession: CopilotAdapterShape["hasSession"] = (threadId) =>
+  const hasSession: CopilotSdkRuntimePort["hasSession"] = (threadId) =>
     Effect.sync(() => sessions.has(threadId));
 
-  const readThread: CopilotAdapterShape["readThread"] = Effect.fn("readThread")(
+  const readThread: CopilotSdkRuntimePort["readThread"] = Effect.fn("readThread")(
     function* (threadId) {
       const context = yield* requireSessionContext(sessions, threadId);
       return {
@@ -3732,7 +3739,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     },
   );
 
-  const rollbackThread: CopilotAdapterShape["rollbackThread"] = Effect.fn("rollbackThread")(
+  const rollbackThread: CopilotSdkRuntimePort["rollbackThread"] = Effect.fn("rollbackThread")(
     function* (threadId, numTurns) {
       const context = yield* requireSessionContext(sessions, threadId);
       return yield* context.historyMutationSemaphore.withPermit(
@@ -3845,7 +3852,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     },
   );
 
-  const stopAll: CopilotAdapterShape["stopAll"] = () =>
+  const stopAll: CopilotSdkRuntimePort["stopAll"] = () =>
     Effect.gen(function* () {
       const activeLifecycleThreadIds = yield* lifecycleLock.activeThreadIds;
       const threadIds = new Set([...sessions.keys(), ...activeLifecycleThreadIds]);
@@ -3881,5 +3888,5 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     get streamEvents() {
       return Stream.fromPubSub(runtimeEventPubSub);
     },
-  } satisfies CopilotAdapterShape;
+  } satisfies CopilotSdkRuntimePort;
 });

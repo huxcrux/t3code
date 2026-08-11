@@ -35,10 +35,10 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { ServerConfig } from "../../config.ts";
-import { makeCopilotAdapter } from "../../provider/Layers/CopilotAdapter.ts";
+import { makeCopilotSdkRuntime } from "./CopilotSdkRuntime.ts";
 import { ProviderEventLoggers } from "../../provider/Layers/ProviderEventLoggers.ts";
 import { mergeProviderInstanceEnvironment } from "../../provider/ProviderInstanceEnvironment.ts";
-import type { CopilotAdapterShape } from "../../provider/Services/CopilotAdapter.ts";
+import type { CopilotSdkRuntimePort } from "./CopilotSdkRuntimeTypes.ts";
 import { IdAllocatorV2, type IdAllocatorV2Error, type IdAllocatorV2Shape } from "../IdAllocator.ts";
 import {
   ProviderAdapterEnsureThreadError,
@@ -76,8 +76,8 @@ const isProviderAdapterRuntimeRequestResponseError = Schema.is(
 );
 const isProviderAdapterRollbackThreadError = Schema.is(ProviderAdapterRollbackThreadError);
 
-export type CopilotAdapterV2LegacyPort = Pick<
-  CopilotAdapterShape,
+export type CopilotAdapterV2RuntimePort = Pick<
+  CopilotSdkRuntimePort,
   | "startSession"
   | "sendTurn"
   | "interruptTurn"
@@ -183,7 +183,7 @@ export const CopilotProviderCapabilitiesV2 = {
 interface TurnContext {
   readonly input: ProviderAdapterV2TurnInput;
   readonly providerTurnId: ProviderTurnId;
-  readonly legacyTurnId: TurnId;
+  readonly runtimeTurnId: TurnId;
   startedAt: DateTime.Utc;
   nextItemOrdinal: number;
 }
@@ -229,7 +229,7 @@ interface CopilotEventProjection {
 
 interface RequestContext {
   readonly appThreadId: ThreadId;
-  readonly legacyRequestId: ApprovalRequestId;
+  readonly sdkRequestId: ApprovalRequestId;
   readonly runtimeRequestId: RuntimeRequestId;
   readonly providerTurnId: ProviderTurnId | null;
   readonly nodeId: OrchestrationV2ExecutionNode["id"];
@@ -398,7 +398,7 @@ const providerThreadFromSession = (input: {
 
 export const makeCopilotAdapterV2 = (options: {
   readonly instanceId: ProviderInstanceId;
-  readonly legacyAdapter: CopilotAdapterV2LegacyPort;
+  readonly runtime: CopilotAdapterV2RuntimePort;
   readonly idAllocator: IdAllocatorV2Shape;
 }): ProviderAdapterV2Shape => ({
   instanceId: options.instanceId,
@@ -424,11 +424,11 @@ export const makeCopilotAdapterV2 = (options: {
       const ownedAppThreadIds = new Set<ThreadId>();
       const pendingStarts = new Map<ThreadId, Array<ProviderAdapterV2TurnInput>>();
       const turns = new Map<TurnId, TurnContext>();
-      const legacyTurnIds = new Map<ProviderTurnId, TurnId>();
+      const runtimeTurnIds = new Map<ProviderTurnId, TurnId>();
       const itemOrdinals = new Map<string, number>();
       const messageText = new Map<string, string>();
       const requests = new Map<RuntimeRequestId, RequestContext>();
-      const legacyRequestIds = new Map<string, RuntimeRequestId>();
+      const sdkRequestIds = new Map<string, RuntimeRequestId>();
       const planIds = new Map<TurnId, PlanId>();
       const subagentsByAgentId = new Map<string, CopilotSubagentContext>();
       const subagentsByToolCallId = new Map<string, CopilotSubagentContext>();
@@ -444,10 +444,10 @@ export const makeCopilotAdapterV2 = (options: {
 
       const resolveTurn = (
         appThreadId: ThreadId,
-        legacyTurnId: TurnId,
+        runtimeTurnId: TurnId,
         createdAt: DateTime.Utc,
       ): TurnContext | undefined => {
-        const existing = turns.get(legacyTurnId);
+        const existing = turns.get(runtimeTurnId);
         if (existing) {
           return existing;
         }
@@ -457,17 +457,17 @@ export const makeCopilotAdapterV2 = (options: {
         }
         const providerTurnId = options.idAllocator.derive.providerTurn({
           driver: COPILOT_DRIVER_KIND,
-          nativeTurnId: String(legacyTurnId),
+          nativeTurnId: String(runtimeTurnId),
         });
         const context: TurnContext = {
           input: pending,
           providerTurnId,
-          legacyTurnId,
+          runtimeTurnId,
           startedAt: createdAt,
           nextItemOrdinal: 1,
         };
-        turns.set(legacyTurnId, context);
-        legacyTurnIds.set(providerTurnId, legacyTurnId);
+        turns.set(runtimeTurnId, context);
+        runtimeTurnIds.set(providerTurnId, runtimeTurnId);
         return context;
       };
 
@@ -478,7 +478,7 @@ export const makeCopilotAdapterV2 = (options: {
         rootNodeId: turn.input.rootNodeId,
         providerThread: turn.input.providerThread,
         providerTurnId: turn.providerTurnId,
-        nativeTurnId: String(turn.legacyTurnId),
+        nativeTurnId: String(turn.runtimeTurnId),
         startedAt: turn.startedAt,
         ordinalState: turn,
       });
@@ -1185,11 +1185,11 @@ export const makeCopilotAdapterV2 = (options: {
             return [] as ReadonlyArray<ProviderAdapterV2Event>;
           }
           const eventNow = yield* DateTime.now;
-          const legacyTurnId = event.turnId;
+          const runtimeTurnId = event.turnId;
           const turn =
-            legacyTurnId === undefined
+            runtimeTurnId === undefined
               ? undefined
-              : resolveTurn(event.threadId, legacyTurnId, eventNow);
+              : resolveTurn(event.threadId, runtimeTurnId, eventNow);
           if (event.type === "task.started" && turn) {
             if (event.payload.taskType === "shell") {
               return [] as ReadonlyArray<ProviderAdapterV2Event>;
@@ -1331,7 +1331,7 @@ export const makeCopilotAdapterV2 = (options: {
               runAttemptId: turn.input.attemptId,
               nativeTurnRef: {
                 driver: COPILOT_DRIVER_KIND,
-                nativeId: String(legacyTurnId),
+                nativeId: String(runtimeTurnId),
                 strength: "weak",
               },
               ordinal: turn.input.providerTurnOrdinal,
@@ -1495,7 +1495,7 @@ export const makeCopilotAdapterV2 = (options: {
             const questions = event.type === "user-input.requested" ? event.payload.questions : [];
             const requestContext: RequestContext = {
               appThreadId: event.threadId,
-              legacyRequestId: ApprovalRequestId.make(String(event.requestId)),
+              sdkRequestId: ApprovalRequestId.make(String(event.requestId)),
               runtimeRequestId,
               providerTurnId,
               nodeId,
@@ -1507,7 +1507,7 @@ export const makeCopilotAdapterV2 = (options: {
               questions,
             };
             requests.set(runtimeRequestId, requestContext);
-            legacyRequestIds.set(String(event.requestId), runtimeRequestId);
+            sdkRequestIds.set(String(event.requestId), runtimeRequestId);
             const runtimeRequest: OrchestrationV2RuntimeRequest = {
               id: runtimeRequestId,
               nodeId,
@@ -1609,7 +1609,7 @@ export const makeCopilotAdapterV2 = (options: {
             (event.type === "request.resolved" || event.type === "user-input.resolved") &&
             event.requestId !== undefined
           ) {
-            const runtimeRequestId = legacyRequestIds.get(String(event.requestId));
+            const runtimeRequestId = sdkRequestIds.get(String(event.requestId));
             const request = runtimeRequestId ? requests.get(runtimeRequestId) : undefined;
             if (!request) {
               return [] as ReadonlyArray<ProviderAdapterV2Event>;
@@ -1650,7 +1650,7 @@ export const makeCopilotAdapterV2 = (options: {
                   providerTurnId: request.providerTurnId,
                   nativeRequestRef: {
                     driver: COPILOT_DRIVER_KIND,
-                    nativeId: String(request.legacyRequestId),
+                    nativeId: String(request.sdkRequestId),
                     strength: "strong",
                   },
                   kind: request.requestKind,
@@ -1676,7 +1676,7 @@ export const makeCopilotAdapterV2 = (options: {
                 providerTurnId: request.turn.providerTurnId,
                 nativeItemRef: {
                   driver: COPILOT_DRIVER_KIND,
-                  nativeId: String(request.legacyRequestId),
+                  nativeId: String(request.sdkRequestId),
                   strength: "strong" as const,
                 },
                 parentItemId: null,
@@ -1717,16 +1717,16 @@ export const makeCopilotAdapterV2 = (options: {
           if (
             (event.type === "turn.proposed.completed" || event.type === "turn.plan.updated") &&
             turn &&
-            legacyTurnId
+            runtimeTurnId
           ) {
             const planId =
-              planIds.get(legacyTurnId) ??
+              planIds.get(runtimeTurnId) ??
               (yield* options.idAllocator.allocate.plan({
                 threadId: turn.input.threadId,
                 runId: turn.input.runId,
                 driver: COPILOT_DRIVER_KIND,
               }));
-            planIds.set(legacyTurnId, planId);
+            planIds.set(runtimeTurnId, planId);
             const markdown =
               event.type === "turn.proposed.completed"
                 ? event.payload.planMarkdown
@@ -1735,7 +1735,7 @@ export const makeCopilotAdapterV2 = (options: {
                     .join("\n");
             const nodeId = options.idAllocator.derive.nodeFromProviderItem({
               driver: COPILOT_DRIVER_KIND,
-              nativeItemId: `plan:${legacyTurnId}`,
+              nativeItemId: `plan:${runtimeTurnId}`,
             });
             const plan: OrchestrationV2PlanArtifact =
               event.type === "turn.proposed.completed"
@@ -1756,7 +1756,7 @@ export const makeCopilotAdapterV2 = (options: {
                     status: "active",
                     kind: "todo_list",
                     steps: event.payload.plan.map((step, index) => ({
-                      id: `${legacyTurnId}:${index}`,
+                      id: `${runtimeTurnId}:${index}`,
                       text: step.step,
                       status:
                         step.status === "inProgress"
@@ -1787,7 +1787,7 @@ export const makeCopilotAdapterV2 = (options: {
                   providerTurnId: turn.providerTurnId,
                   nativeItemRef: {
                     driver: COPILOT_DRIVER_KIND,
-                    nativeId: `plan:${legacyTurnId}`,
+                    nativeId: `plan:${runtimeTurnId}`,
                     strength: "weak",
                   },
                   runtimeRequestId: null,
@@ -1819,7 +1819,7 @@ export const makeCopilotAdapterV2 = (options: {
               runAttemptId: turn.input.attemptId,
               nativeTurnRef: {
                 driver: COPILOT_DRIVER_KIND,
-                nativeId: String(turn.legacyTurnId),
+                nativeId: String(turn.runtimeTurnId),
                 strength: "weak",
               },
               ordinal: turn.input.providerTurnOrdinal,
@@ -1891,7 +1891,7 @@ export const makeCopilotAdapterV2 = (options: {
           return [] as ReadonlyArray<ProviderAdapterV2Event>;
         });
 
-      const events = options.legacyAdapter.streamEvents.pipe(
+      const events = options.runtime.streamEvents.pipe(
         Stream.mapEffect(convertEvent),
         Stream.flatMap((items) => Stream.fromIterable(items)),
         Stream.mapError(
@@ -1908,9 +1908,9 @@ export const makeCopilotAdapterV2 = (options: {
         Effect.forEach(
           ownedAppThreadIds,
           (threadId) =>
-            options.legacyAdapter.hasSession(threadId).pipe(
+            options.runtime.hasSession(threadId).pipe(
               Effect.flatMap((hasSession) =>
-                hasSession ? options.legacyAdapter.stopSession(threadId) : Effect.void,
+                hasSession ? options.runtime.stopSession(threadId) : Effect.void,
               ),
               Effect.ignore,
             ),
@@ -1930,7 +1930,7 @@ export const makeCopilotAdapterV2 = (options: {
             if (existing) {
               return existing;
             }
-            const session = yield* options.legacyAdapter.startSession({
+            const session = yield* options.runtime.startSession({
               threadId: input.threadId,
               provider: COPILOT_DRIVER_KIND,
               providerInstanceId: options.instanceId,
@@ -1975,15 +1975,14 @@ export const makeCopilotAdapterV2 = (options: {
             }
             const previousAppThreadId = input.providerThread.appThreadId;
             if (previousAppThreadId !== null && previousAppThreadId !== appThreadId) {
-              const hasPreviousSession =
-                yield* options.legacyAdapter.hasSession(previousAppThreadId);
+              const hasPreviousSession = yield* options.runtime.hasSession(previousAppThreadId);
               if (hasPreviousSession) {
-                yield* options.legacyAdapter.stopSession(previousAppThreadId);
+                yield* options.runtime.stopSession(previousAppThreadId);
               }
               ownedAppThreadIds.delete(previousAppThreadId);
               providerThreads.delete(previousAppThreadId);
             }
-            const session = yield* options.legacyAdapter.startSession({
+            const session = yield* options.runtime.startSession({
               threadId: appThreadId,
               provider: COPILOT_DRIVER_KIND,
               providerInstanceId: options.instanceId,
@@ -2031,7 +2030,7 @@ export const makeCopilotAdapterV2 = (options: {
             const pending = pendingStarts.get(input.threadId) ?? [];
             pending.push(input);
             pendingStarts.set(input.threadId, pending);
-            const result = yield* options.legacyAdapter
+            const result = yield* options.runtime
               .sendTurn({
                 threadId: input.threadId,
                 input: input.message.text || undefined,
@@ -2056,12 +2055,12 @@ export const makeCopilotAdapterV2 = (options: {
               turns.set(result.turnId, {
                 input,
                 providerTurnId,
-                legacyTurnId: result.turnId,
+                runtimeTurnId: result.turnId,
                 startedAt,
                 nextItemOrdinal: 1,
               });
             }
-            legacyTurnIds.set(providerTurnId, result.turnId);
+            runtimeTurnIds.set(providerTurnId, result.turnId);
           },
           (effect, input) =>
             effect.pipe(
@@ -2087,9 +2086,9 @@ export const makeCopilotAdapterV2 = (options: {
         interruptTurn: Effect.fn("CopilotAdapterV2.interruptTurn")(
           function* (input) {
             const appThreadId = input.providerThread.appThreadId;
-            const legacyTurnId = legacyTurnIds.get(input.providerTurnId);
+            const runtimeTurnId = runtimeTurnIds.get(input.providerTurnId);
             if (appThreadId !== null) {
-              yield* options.legacyAdapter.interruptTurn(appThreadId, legacyTurnId);
+              yield* options.runtime.interruptTurn(appThreadId, runtimeTurnId);
             }
           },
           (effect, input) =>
@@ -2123,9 +2122,9 @@ export const makeCopilotAdapterV2 = (options: {
                   cause: "Copilot user input request requires answers.",
                 });
               }
-              yield* options.legacyAdapter.respondToUserInput(
+              yield* options.runtime.respondToUserInput(
                 request.appThreadId,
-                request.legacyRequestId,
+                request.sdkRequestId,
                 input.answers,
               );
               return;
@@ -2137,9 +2136,9 @@ export const makeCopilotAdapterV2 = (options: {
                 cause: "Copilot approval request requires a decision.",
               });
             }
-            yield* options.legacyAdapter.respondToRequest(
+            yield* options.runtime.respondToRequest(
               request.appThreadId,
-              request.legacyRequestId,
+              request.sdkRequestId,
               input.decision,
             );
           },
@@ -2182,7 +2181,7 @@ export const makeCopilotAdapterV2 = (options: {
               ).length;
             }
             if (turnsToRemove > 0) {
-              yield* options.legacyAdapter.rollbackThread(appThreadId, turnsToRemove);
+              yield* options.runtime.rollbackThread(appThreadId, turnsToRemove);
             }
             const updatedAt = yield* DateTime.now;
             return {
@@ -2266,7 +2265,7 @@ export const CopilotAdapterV2Driver: ProviderAdapterDriver<
         input.instanceId,
       );
       yield* fileSystem.makeDirectory(baseDirectory, { recursive: true });
-      const legacyAdapter = yield* makeCopilotAdapter(
+      const runtime = yield* makeCopilotSdkRuntime(
         { ...input.config, enabled: input.enabled },
         {
           instanceId: input.instanceId,
@@ -2277,7 +2276,7 @@ export const CopilotAdapterV2Driver: ProviderAdapterDriver<
       );
       return makeCopilotAdapterV2({
         instanceId: input.instanceId,
-        legacyAdapter,
+        runtime,
         idAllocator,
       });
     },

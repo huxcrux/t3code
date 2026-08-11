@@ -1,13 +1,11 @@
 /**
- * CopilotAdapter — shape type for the GitHub Copilot provider adapter.
+ * CopilotSdkRuntimeTypes — internal port for the GitHub Copilot SDK runtime.
  *
- * Historically this module exposed a `Context.Service` tag so consumers
- * could inject the adapter through the Effect layer graph. The driver
- * model ({@link ../Drivers/CopilotDriver}) bundles one adapter per
- * instance as a captured closure instead, so the tag is gone — we only
- * retain the shape interface as a naming anchor for the driver bundle.
+ * The v2 adapter owns orchestration semantics; this port isolates the lower-level
+ * SDK session lifecycle so tests can exercise it without going through the full
+ * orchestrator.
  *
- * @module CopilotAdapter
+ * @module CopilotSdkRuntimeTypes
  */
 import type {
   ApprovalRequestId,
@@ -26,7 +24,7 @@ import type * as Effect from "effect/Effect";
 import * as Schema from "effect/Schema";
 import type * as Stream from "effect/Stream";
 
-export class CopilotAdapterValidationError extends Schema.TaggedErrorClass<CopilotAdapterValidationError>()(
+export class CopilotSdkRuntimeValidationError extends Schema.TaggedErrorClass<CopilotSdkRuntimeValidationError>()(
   "ProviderAdapterValidationError",
   {
     provider: Schema.String,
@@ -40,7 +38,7 @@ export class CopilotAdapterValidationError extends Schema.TaggedErrorClass<Copil
   }
 }
 
-export class CopilotAdapterSessionNotFoundError extends Schema.TaggedErrorClass<CopilotAdapterSessionNotFoundError>()(
+export class CopilotSdkRuntimeSessionNotFoundError extends Schema.TaggedErrorClass<CopilotSdkRuntimeSessionNotFoundError>()(
   "ProviderAdapterSessionNotFoundError",
   {
     provider: Schema.String,
@@ -53,7 +51,7 @@ export class CopilotAdapterSessionNotFoundError extends Schema.TaggedErrorClass<
   }
 }
 
-export class CopilotAdapterSessionClosedError extends Schema.TaggedErrorClass<CopilotAdapterSessionClosedError>()(
+export class CopilotSdkRuntimeSessionClosedError extends Schema.TaggedErrorClass<CopilotSdkRuntimeSessionClosedError>()(
   "ProviderAdapterSessionClosedError",
   {
     provider: Schema.String,
@@ -66,7 +64,7 @@ export class CopilotAdapterSessionClosedError extends Schema.TaggedErrorClass<Co
   }
 }
 
-export class CopilotAdapterRequestError extends Schema.TaggedErrorClass<CopilotAdapterRequestError>()(
+export class CopilotSdkRuntimeRequestError extends Schema.TaggedErrorClass<CopilotSdkRuntimeRequestError>()(
   "ProviderAdapterRequestError",
   {
     provider: Schema.String,
@@ -80,7 +78,7 @@ export class CopilotAdapterRequestError extends Schema.TaggedErrorClass<CopilotA
   }
 }
 
-export class CopilotAdapterProcessError extends Schema.TaggedErrorClass<CopilotAdapterProcessError>()(
+export class CopilotSdkRuntimeProcessError extends Schema.TaggedErrorClass<CopilotSdkRuntimeProcessError>()(
   "ProviderAdapterProcessError",
   {
     provider: Schema.String,
@@ -94,42 +92,42 @@ export class CopilotAdapterProcessError extends Schema.TaggedErrorClass<CopilotA
   }
 }
 
-export type CopilotAdapterError =
-  | CopilotAdapterValidationError
-  | CopilotAdapterSessionNotFoundError
-  | CopilotAdapterSessionClosedError
-  | CopilotAdapterRequestError
-  | CopilotAdapterProcessError;
+export type CopilotSdkRuntimeError =
+  | CopilotSdkRuntimeValidationError
+  | CopilotSdkRuntimeSessionNotFoundError
+  | CopilotSdkRuntimeSessionClosedError
+  | CopilotSdkRuntimeRequestError
+  | CopilotSdkRuntimeProcessError;
 
 /**
- * CopilotAdapterShape — per-instance GitHub Copilot adapter contract.
+ * CopilotSdkRuntimePort — per-instance GitHub Copilot SDK runtime contract.
  */
-export interface CopilotAdapterShape {
+export interface CopilotSdkRuntimePort {
   readonly provider: ProviderDriverKind;
   readonly capabilities: {
     readonly sessionModelSwitch: "in-session" | "unsupported";
   };
   readonly startSession: (
     input: ProviderSessionStartInput,
-  ) => Effect.Effect<ProviderSession, CopilotAdapterError>;
+  ) => Effect.Effect<ProviderSession, CopilotSdkRuntimeError>;
   readonly sendTurn: (
     input: ProviderSendTurnInput,
-  ) => Effect.Effect<ProviderTurnStartResult, CopilotAdapterError>;
+  ) => Effect.Effect<ProviderTurnStartResult, CopilotSdkRuntimeError>;
   readonly interruptTurn: (
     threadId: ThreadId,
     turnId?: TurnId,
-  ) => Effect.Effect<void, CopilotAdapterError>;
+  ) => Effect.Effect<void, CopilotSdkRuntimeError>;
   readonly respondToRequest: (
     threadId: ThreadId,
     requestId: ApprovalRequestId,
     decision: ProviderApprovalDecision,
-  ) => Effect.Effect<void, CopilotAdapterError>;
+  ) => Effect.Effect<void, CopilotSdkRuntimeError>;
   readonly respondToUserInput: (
     threadId: ThreadId,
     requestId: ApprovalRequestId,
     answers: ProviderUserInputAnswers,
-  ) => Effect.Effect<void, CopilotAdapterError>;
-  readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, CopilotAdapterError>;
+  ) => Effect.Effect<void, CopilotSdkRuntimeError>;
+  readonly stopSession: (threadId: ThreadId) => Effect.Effect<void, CopilotSdkRuntimeError>;
   readonly listSessions: () => Effect.Effect<ReadonlyArray<ProviderSession>>;
   readonly hasSession: (threadId: ThreadId) => Effect.Effect<boolean>;
   readonly readThread: (threadId: ThreadId) => Effect.Effect<
@@ -140,7 +138,7 @@ export interface CopilotAdapterShape {
         readonly items: ReadonlyArray<unknown>;
       }>;
     },
-    CopilotAdapterError
+    CopilotSdkRuntimeError
   >;
   readonly rollbackThread: (
     threadId: ThreadId,
@@ -153,8 +151,8 @@ export interface CopilotAdapterShape {
         readonly items: ReadonlyArray<unknown>;
       }>;
     },
-    CopilotAdapterError
+    CopilotSdkRuntimeError
   >;
-  readonly stopAll: () => Effect.Effect<void, CopilotAdapterError>;
+  readonly stopAll: () => Effect.Effect<void, CopilotSdkRuntimeError>;
   readonly streamEvents: Stream.Stream<ProviderRuntimeEvent>;
 }

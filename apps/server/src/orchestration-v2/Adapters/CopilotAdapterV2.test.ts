@@ -24,7 +24,7 @@ import * as Fiber from "effect/Fiber";
 import * as PubSub from "effect/PubSub";
 import * as Stream from "effect/Stream";
 
-import { CopilotAdapterValidationError } from "../../provider/Services/CopilotAdapter.ts";
+import { CopilotSdkRuntimeValidationError } from "./CopilotSdkRuntimeTypes.ts";
 import { IdAllocatorV2, layer as idAllocatorLayer } from "../IdAllocator.ts";
 import {
   ProviderAdapterV2RuntimePolicy,
@@ -34,12 +34,12 @@ import {
 import {
   COPILOT_DRIVER_KIND,
   makeCopilotAdapterV2,
-  type CopilotAdapterV2LegacyPort,
+  type CopilotAdapterV2RuntimePort,
 } from "./CopilotAdapterV2.ts";
 
 const INSTANCE_ID = ProviderInstanceId.make("copilot-test");
 const THREAD_ID = ThreadId.make("copilot-v2-thread");
-const LEGACY_TURN_ID = TurnId.make("copilot-turn-1");
+const RUNTIME_TURN_ID = TurnId.make("copilot-turn-1");
 const MODEL_SELECTION = {
   instanceId: INSTANCE_ID,
   model: "gpt-5",
@@ -127,14 +127,14 @@ function baseEvent(input: {
   };
 }
 
-function makeLegacyAdapter(input: {
+function makeRuntimePort(input: {
   readonly events: PubSub.PubSub<ProviderRuntimeEvent>;
   readonly approvalResponses: Array<{
     readonly requestId: string;
     readonly decision: string;
   }>;
-  readonly sendTurn?: CopilotAdapterV2LegacyPort["sendTurn"];
-}): CopilotAdapterV2LegacyPort {
+  readonly sendTurn?: CopilotAdapterV2RuntimePort["sendTurn"];
+}): CopilotAdapterV2RuntimePort {
   return {
     startSession: (startInput) =>
       Effect.succeed({
@@ -153,13 +153,13 @@ function makeLegacyAdapter(input: {
       input.sendTurn ??
       ((turnInput) =>
         PubSub.publish(input.events, {
-          ...baseEvent({ type: "turn.started", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "turn.started", turnId: RUNTIME_TURN_ID }),
           type: "turn.started",
           payload: { model: turnInput.modelSelection?.model },
         }).pipe(
           Effect.as({
             threadId: turnInput.threadId,
-            turnId: LEGACY_TURN_ID,
+            turnId: RUNTIME_TURN_ID,
           }),
         )),
     interruptTurn: () => Effect.void,
@@ -181,7 +181,7 @@ function makeLegacyAdapter(input: {
 const makeRuntime = (options?: {
   readonly sendTurn?: (
     events: PubSub.PubSub<ProviderRuntimeEvent>,
-  ) => CopilotAdapterV2LegacyPort["sendTurn"];
+  ) => CopilotAdapterV2RuntimePort["sendTurn"];
 }) =>
   Effect.gen(function* () {
     const idAllocator = yield* IdAllocatorV2;
@@ -189,7 +189,7 @@ const makeRuntime = (options?: {
     const approvalResponses: Array<{ requestId: string; decision: string }> = [];
     const adapter = makeCopilotAdapterV2({
       instanceId: INSTANCE_ID,
-      legacyAdapter: makeLegacyAdapter({
+      runtime: makeRuntimePort({
         events,
         approvalResponses,
         ...(options?.sendTurn ? { sendTurn: options.sendTurn(events) } : {}),
@@ -252,7 +252,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "task.started", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "task.started", turnId: RUNTIME_TURN_ID }),
           type: "task.started",
           payload: {
             taskId: RuntimeTaskId.make("copilot-shell-task"),
@@ -261,7 +261,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "task.started", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "task.started", turnId: RUNTIME_TURN_ID }),
           type: "task.started",
           raw: raw("subagent.started", {
             toolCallId: "spawn-agent-1",
@@ -277,7 +277,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "task.progress", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "task.progress", turnId: RUNTIME_TURN_ID }),
           type: "task.progress",
           raw: raw("assistant.turn_start", { turnId: "child-turn-1", model: "gpt-5" }),
           payload: {
@@ -290,7 +290,7 @@ describe("CopilotAdapterV2", () => {
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({
             type: "content.delta",
-            turnId: LEGACY_TURN_ID,
+            turnId: RUNTIME_TURN_ID,
             itemId: childItemId,
           }),
           type: "content.delta",
@@ -303,7 +303,7 @@ describe("CopilotAdapterV2", () => {
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({
             type: "item.completed",
-            turnId: LEGACY_TURN_ID,
+            turnId: RUNTIME_TURN_ID,
             itemId: childItemId,
           }),
           type: "item.completed",
@@ -318,7 +318,7 @@ describe("CopilotAdapterV2", () => {
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({
             type: "item.started",
-            turnId: LEGACY_TURN_ID,
+            turnId: RUNTIME_TURN_ID,
             itemId: RuntimeItemId.make("copilot-tool-spawn-nested-agent"),
           }),
           type: "item.started",
@@ -340,7 +340,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "task.started", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "task.started", turnId: RUNTIME_TURN_ID }),
           type: "task.started",
           raw: raw(
             "subagent.started",
@@ -359,7 +359,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "task.completed", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "task.completed", turnId: RUNTIME_TURN_ID }),
           type: "task.completed",
           raw: raw(
             "subagent.completed",
@@ -377,7 +377,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "task.progress", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "task.progress", turnId: RUNTIME_TURN_ID }),
           type: "task.progress",
           raw: raw("assistant.turn_end", { turnId: "child-turn-1", model: "gpt-5" }),
           payload: {
@@ -387,7 +387,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "task.completed", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "task.completed", turnId: RUNTIME_TURN_ID }),
           type: "task.completed",
           raw: raw("subagent.completed", {
             toolCallId: "spawn-agent-1",
@@ -460,7 +460,7 @@ describe("CopilotAdapterV2", () => {
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({
             type: "content.delta",
-            turnId: LEGACY_TURN_ID,
+            turnId: RUNTIME_TURN_ID,
             itemId: finalItemId,
           }),
           type: "content.delta",
@@ -477,7 +477,7 @@ describe("CopilotAdapterV2", () => {
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({
             type: "item.completed",
-            turnId: LEGACY_TURN_ID,
+            turnId: RUNTIME_TURN_ID,
             itemId: finalItemId,
           }),
           type: "item.completed",
@@ -493,7 +493,7 @@ describe("CopilotAdapterV2", () => {
           payload: { itemType: "assistant_message", status: "completed" },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "turn.completed", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "turn.completed", turnId: RUNTIME_TURN_ID }),
           type: "turn.completed",
           payload: { state: "completed" },
         });
@@ -525,14 +525,14 @@ describe("CopilotAdapterV2", () => {
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({
             type: "content.delta",
-            turnId: LEGACY_TURN_ID,
+            turnId: RUNTIME_TURN_ID,
             itemId: RuntimeItemId.make("copilot-assistant-item"),
           }),
           type: "content.delta",
           payload: { streamKind: "assistant_text", delta: "Hello from Copilot" },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "item.started", turnId: LEGACY_TURN_ID, itemId }),
+          ...baseEvent({ type: "item.started", turnId: RUNTIME_TURN_ID, itemId }),
           type: "item.started",
           payload: {
             itemType: "command_execution",
@@ -542,7 +542,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "item.completed", turnId: LEGACY_TURN_ID, itemId }),
+          ...baseEvent({ type: "item.completed", turnId: RUNTIME_TURN_ID, itemId }),
           type: "item.completed",
           payload: {
             itemType: "command_execution",
@@ -553,7 +553,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "turn.completed", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "turn.completed", turnId: RUNTIME_TURN_ID }),
           type: "turn.completed",
           payload: { state: "completed" },
         });
@@ -614,7 +614,7 @@ describe("CopilotAdapterV2", () => {
         yield* fixture.runtime.startTurn(fixture.turnInput);
         const itemId = RuntimeItemId.make("copilot-streamed-assistant-item");
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "item.started", turnId: LEGACY_TURN_ID, itemId }),
+          ...baseEvent({ type: "item.started", turnId: RUNTIME_TURN_ID, itemId }),
           type: "item.started",
           payload: {
             itemType: "assistant_message",
@@ -622,7 +622,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "content.delta", turnId: LEGACY_TURN_ID, itemId }),
+          ...baseEvent({ type: "content.delta", turnId: RUNTIME_TURN_ID, itemId }),
           type: "content.delta",
           payload: {
             streamKind: "assistant_text",
@@ -630,7 +630,7 @@ describe("CopilotAdapterV2", () => {
           },
         });
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "item.completed", turnId: LEGACY_TURN_ID, itemId }),
+          ...baseEvent({ type: "item.completed", turnId: RUNTIME_TURN_ID, itemId }),
           type: "item.completed",
           payload: {
             itemType: "assistant_message",
@@ -660,7 +660,7 @@ describe("CopilotAdapterV2", () => {
     ).pipe(Effect.provide(idAllocatorLayer)),
   );
 
-  it.effect("maps approvals and routes responses to the legacy adapter", () =>
+  it.effect("maps approvals and routes responses to the runtime port", () =>
     Effect.scoped(
       Effect.gen(function* () {
         const fixture = yield* makeRuntime();
@@ -671,12 +671,12 @@ describe("CopilotAdapterV2", () => {
         );
         yield* Effect.yieldNow;
         yield* fixture.runtime.startTurn(fixture.turnInput);
-        const legacyRequestId = RuntimeRequestId.make("copilot-approval");
+        const runtimeRequestId = RuntimeRequestId.make("copilot-approval");
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({
             type: "request.opened",
-            turnId: LEGACY_TURN_ID,
-            requestId: legacyRequestId,
+            turnId: RUNTIME_TURN_ID,
+            requestId: runtimeRequestId,
           }),
           type: "request.opened",
           payload: {
@@ -720,7 +720,7 @@ describe("CopilotAdapterV2", () => {
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({
             type: "user-input.requested",
-            turnId: LEGACY_TURN_ID,
+            turnId: RUNTIME_TURN_ID,
             requestId: RuntimeRequestId.make("copilot-user-input"),
           }),
           type: "user-input.requested",
@@ -763,7 +763,7 @@ describe("CopilotAdapterV2", () => {
         yield* Effect.yieldNow;
         yield* fixture.runtime.startTurn(fixture.turnInput);
         yield* PubSub.publish(fixture.events, {
-          ...baseEvent({ type: "turn.proposed.completed", turnId: LEGACY_TURN_ID }),
+          ...baseEvent({ type: "turn.proposed.completed", turnId: RUNTIME_TURN_ID }),
           type: "turn.proposed.completed",
           payload: { planMarkdown: "1. Update the adapter\n2. Run tests" },
         });
@@ -791,7 +791,7 @@ describe("CopilotAdapterV2", () => {
             attempts += 1;
             if (attempts === 1) {
               return Effect.fail(
-                new CopilotAdapterValidationError({
+                new CopilotSdkRuntimeValidationError({
                   provider: COPILOT_DRIVER_KIND,
                   operation: "sendTurn",
                   issue: "Rejected before creating a provider turn.",
