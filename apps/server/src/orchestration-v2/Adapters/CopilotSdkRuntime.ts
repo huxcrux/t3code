@@ -783,17 +783,7 @@ function completedToolDiffText(
   if (toolMeta?.itemType === "file_change" && applyPatchDiff) {
     return applyPatchDiff;
   }
-  if (!normalized) {
-    return undefined;
-  }
-  if (toolMeta?.itemType !== "command_execution" && toolMeta?.itemType !== "file_change") {
-    return undefined;
-  }
-  const diffCandidate = stripCopilotShellCompletionControlLines(normalized);
-  if (!hasUnifiedDiffShape(diffCandidate)) {
-    return undefined;
-  }
-  return parseTurnDiffFilesFromUnifiedDiff(diffCandidate).length > 0 ? diffCandidate : undefined;
+  return undefined;
 }
 
 function completedCopilotTaskStatus(

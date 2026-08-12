@@ -2089,6 +2089,98 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
     }),
   );
 
+  it.effect("does not treat generic diff command output as a Copilot file edit", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CopilotSdkRuntime;
+      const threadId = asThreadId("copilot-generic-diff-output");
+
+      yield* adapter.startSession({
+        provider: COPILOT_DRIVER,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "inspect the current diff",
+        attachments: [],
+      });
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => runtimeEvents.push(event))),
+        Effect.forkChild,
+      );
+      yield* waitForSdkEventQueue();
+
+      const config = runtimeMock.state.createSessionConfigs.at(-1);
+      NodeAssert.ok(config?.onEvent);
+      const timestamp = yield* nowIso;
+      const diffOutput =
+        "diff --git a/README.md b/README.md\n" +
+        "--- a/README.md\n" +
+        "+++ b/README.md\n" +
+        "@@ -1 +1 @@\n" +
+        "-old\n" +
+        "+new\n";
+
+      config.onEvent({
+        id: "evt-copilot-generic-diff-turn-start",
+        timestamp,
+        parentId: null,
+        type: "assistant.turn_start",
+        data: { turnId: "sdk-turn-generic-diff-output" },
+      } as SessionEvent);
+      config.onEvent({
+        id: "evt-copilot-generic-diff-tool-start",
+        timestamp,
+        parentId: null,
+        type: "tool.execution_start",
+        data: {
+          turnId: "sdk-turn-generic-diff-output",
+          toolCallId: "tool-git-diff",
+          toolName: "Shell",
+          arguments: { command: "git diff -- README.md" },
+        },
+      } as SessionEvent);
+      config.onEvent({
+        id: "evt-copilot-generic-diff-tool-complete",
+        timestamp,
+        parentId: null,
+        type: "tool.execution_complete",
+        data: {
+          turnId: "sdk-turn-generic-diff-output",
+          toolCallId: "tool-git-diff",
+          success: true,
+          result: {
+            content: diffOutput,
+            detailedContent: diffOutput,
+          },
+        },
+      } as SessionEvent);
+      config.onEvent({
+        id: "evt-copilot-generic-diff-turn-end",
+        timestamp,
+        parentId: null,
+        type: "assistant.turn_end",
+        data: { turnId: "sdk-turn-generic-diff-output" },
+      } as SessionEvent);
+
+      yield* waitForSdkEventQueue();
+      yield* Fiber.interrupt(runtimeEventsFiber).pipe(Effect.ignore);
+
+      NodeAssert.equal(
+        runtimeEvents.some(
+          (event) => event.type === "turn.diff.updated" && String(event.turnId) === turn.turnId,
+        ),
+        false,
+      );
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("does not emit empty Copilot assistant messages around tool calls", () =>
     Effect.gen(function* () {
       const adapter = yield* CopilotSdkRuntime;
