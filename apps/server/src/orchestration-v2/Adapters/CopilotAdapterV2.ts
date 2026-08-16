@@ -6,6 +6,7 @@ import {
   type OrchestrationV2AppThread,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2ExecutionNode,
+  type OrchestrationV2PendingBackgroundTask,
   type OrchestrationV2ProviderCapabilities,
   type OrchestrationV2PlanArtifact,
   type OrchestrationV2ProviderThread,
@@ -258,6 +259,10 @@ const copilotSdkEventData = (
 const copilotSdkAgentId = (event: ProviderRuntimeEvent): string | undefined =>
   stringField(copilotSdkEvent(event), "agentId");
 
+const isCopilotNativeSubagentStart = (
+  event: Extract<ProviderRuntimeEvent, { type: "task.started" }>,
+): boolean => event.raw?.source === "copilot.sdk.event" && event.raw.method === "subagent.started";
+
 const copilotSdkTurnId = (event: ProviderRuntimeEvent): string | undefined =>
   stringField(copilotSdkEventData(event), "turnId") ?? event.providerRefs?.providerTurnId;
 
@@ -433,6 +438,10 @@ export const makeCopilotAdapterV2 = (options: {
       const subagentsByAgentId = new Map<string, CopilotSubagentContext>();
       const subagentsByToolCallId = new Map<string, CopilotSubagentContext>();
       const subagentParentsByToolCallId = new Map<string, CopilotSubagentContext>();
+      const pendingBackgroundTasksByThread = new Map<
+        ThreadId,
+        Map<string, OrchestrationV2PendingBackgroundTask>
+      >();
 
       const removePendingStart = (input: ProviderAdapterV2TurnInput): void => {
         const queued = pendingStarts.get(input.threadId);
@@ -499,6 +508,44 @@ export const makeCopilotAdapterV2 = (options: {
             driver: COPILOT_DRIVER_KIND,
             nativeItemId,
           }),
+        };
+      };
+
+      const updatePendingBackgroundTasks = (
+        turn: TurnContext,
+        taskId: string,
+        eventNow: DateTime.Utc,
+        operation: "upsert" | "clear",
+        task?: Omit<OrchestrationV2PendingBackgroundTask, "taskId">,
+      ): ProviderAdapterV2Event => {
+        const currentRoster = new Map(pendingBackgroundTasksByThread.get(turn.input.threadId));
+        if (operation === "upsert") {
+          currentRoster.set(taskId, {
+            taskId,
+            ...(task?.description === undefined ? {} : { description: task.description }),
+            ...(task?.taskType === undefined ? {} : { taskType: task.taskType }),
+          });
+        } else {
+          currentRoster.delete(taskId);
+        }
+        if (currentRoster.size === 0) {
+          pendingBackgroundTasksByThread.delete(turn.input.threadId);
+        } else {
+          pendingBackgroundTasksByThread.set(turn.input.threadId, currentRoster);
+        }
+        const currentProviderThread =
+          providerThreads.get(turn.input.threadId) ?? turn.input.providerThread;
+        const providerThread: OrchestrationV2ProviderThread = {
+          ...currentProviderThread,
+          providerSessionId: sessionInput.providerSessionId,
+          pendingBackgroundTasks: Array.from(currentRoster.values()),
+          updatedAt: eventNow,
+        };
+        providerThreads.set(turn.input.threadId, providerThread);
+        return {
+          type: "provider_thread.updated",
+          driver: COPILOT_DRIVER_KIND,
+          providerThread,
         };
       };
 
@@ -1191,16 +1238,43 @@ export const makeCopilotAdapterV2 = (options: {
               ? undefined
               : resolveTurn(event.threadId, runtimeTurnId, eventNow);
           if (event.type === "task.started" && turn) {
-            if (event.payload.taskType === "shell") {
-              return [] as ReadonlyArray<ProviderAdapterV2Event>;
+            if (isCopilotNativeSubagentStart(event)) {
+              return registerSubagent(event, turn, eventNow);
             }
-            return registerSubagent(event, turn, eventNow);
+            return [
+              updatePendingBackgroundTasks(turn, String(event.payload.taskId), eventNow, "upsert", {
+                ...(event.payload.description === undefined
+                  ? {}
+                  : { description: event.payload.description }),
+                ...(event.payload.taskType === undefined
+                  ? {}
+                  : { taskType: event.payload.taskType }),
+              }),
+            ];
           }
           if (event.type === "task.progress") {
             const agentId = copilotSdkAgentId(event) ?? String(event.payload.taskId);
             const subagent = subagentsByAgentId.get(agentId);
             if (!subagent) {
-              return [] as ReadonlyArray<ProviderAdapterV2Event>;
+              if (!turn) {
+                return [] as ReadonlyArray<ProviderAdapterV2Event>;
+              }
+              return [
+                updatePendingBackgroundTasks(
+                  turn,
+                  String(event.payload.taskId),
+                  eventNow,
+                  "upsert",
+                  {
+                    ...(event.payload.description === undefined
+                      ? {}
+                      : { description: event.payload.description }),
+                    ...(event.payload.taskType === undefined
+                      ? {}
+                      : { taskType: event.payload.taskType }),
+                  },
+                ),
+              ];
             }
             const rawMethod = event.raw?.method;
             const output: Array<ProviderAdapterV2Event> = [];
@@ -1240,7 +1314,12 @@ export const makeCopilotAdapterV2 = (options: {
             const agentId = copilotSdkAgentId(event) ?? String(event.payload.taskId);
             const subagent = subagentsByAgentId.get(agentId);
             if (!subagent) {
-              return [] as ReadonlyArray<ProviderAdapterV2Event>;
+              if (!turn) {
+                return [] as ReadonlyArray<ProviderAdapterV2Event>;
+              }
+              return [
+                updatePendingBackgroundTasks(turn, String(event.payload.taskId), eventNow, "clear"),
+              ];
             }
             const status: OrchestrationV2Subagent["status"] =
               event.payload.status === "failed"

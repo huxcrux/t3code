@@ -263,6 +263,16 @@ describe("CopilotAdapterV2", () => {
         yield* PubSub.publish(fixture.events, {
           ...baseEvent({ type: "task.started", turnId: RUNTIME_TURN_ID }),
           type: "task.started",
+          raw: raw("session.background_tasks_changed", {}, ""),
+          payload: {
+            taskId: RuntimeTaskId.make("copilot-background-agent-task"),
+            description: "Track a background agent task",
+            taskType: "explore",
+          },
+        });
+        yield* PubSub.publish(fixture.events, {
+          ...baseEvent({ type: "task.started", turnId: RUNTIME_TURN_ID }),
+          type: "task.started",
           raw: raw("subagent.started", {
             toolCallId: "spawn-agent-1",
             agentName: "explore",
@@ -405,6 +415,25 @@ describe("CopilotAdapterV2", () => {
           )
           .map((event) => event.appThread);
         assert.lengthOf(createdThreads, 2);
+        const backgroundRoster = collected.find(
+          (event): event is Extract<ProviderAdapterV2Event, { type: "provider_thread.updated" }> =>
+            event.type === "provider_thread.updated" &&
+            event.providerThread.pendingBackgroundTasks?.some(
+              (task) => task.taskId === "copilot-background-agent-task",
+            ) === true,
+        )?.providerThread.pendingBackgroundTasks;
+        assert.deepEqual(backgroundRoster, [
+          {
+            taskId: "copilot-shell-task",
+            description: "Run a detached command",
+            taskType: "shell",
+          },
+          {
+            taskId: "copilot-background-agent-task",
+            description: "Track a background agent task",
+            taskType: "explore",
+          },
+        ]);
         const childThread = createdThreads.find(
           (thread) => thread.lineage.parentThreadId === THREAD_ID,
         );
@@ -449,6 +478,43 @@ describe("CopilotAdapterV2", () => {
           collected.some((event) => event.type === "turn.terminal"),
           false,
         );
+
+        const rosterClearFiber = yield* fixture.runtime.events.pipe(
+          Stream.takeUntil(
+            (event) =>
+              event.type === "provider_thread.updated" &&
+              event.providerThread.id === fixture.turnInput.providerThread.id &&
+              event.providerThread.pendingBackgroundTasks?.some(
+                (task) => task.taskId === "copilot-background-agent-task",
+              ) !== true,
+          ),
+          Stream.runCollect,
+          Effect.forkScoped,
+        );
+        yield* Effect.yieldNow;
+        yield* PubSub.publish(fixture.events, {
+          ...baseEvent({ type: "task.completed", turnId: RUNTIME_TURN_ID }),
+          type: "task.completed",
+          raw: raw("session.background_tasks_changed", {}, ""),
+          payload: {
+            taskId: RuntimeTaskId.make("copilot-background-agent-task"),
+            status: "completed",
+            summary: "Background task complete",
+          },
+        });
+        const rosterClearEvents = Array.from(yield* Fiber.join(rosterClearFiber));
+        const emptyRoster = rosterClearEvents.findLast(
+          (event): event is Extract<ProviderAdapterV2Event, { type: "provider_thread.updated" }> =>
+            event.type === "provider_thread.updated" &&
+            event.providerThread.id === fixture.turnInput.providerThread.id,
+        )?.providerThread.pendingBackgroundTasks;
+        assert.deepEqual(emptyRoster ?? [], [
+          {
+            taskId: "copilot-shell-task",
+            description: "Run a detached command",
+            taskType: "shell",
+          },
+        ]);
 
         const terminalFiber = yield* fixture.runtime.events.pipe(
           Stream.takeUntil((event) => event.type === "turn.terminal"),

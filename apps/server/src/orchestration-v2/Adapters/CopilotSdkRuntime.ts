@@ -802,6 +802,10 @@ function completedCopilotTaskStatus(
   }
 }
 
+function isCopilotTaskTerminalStatus(status: CopilotTaskStatus): boolean {
+  return completedCopilotTaskStatus(status) !== undefined;
+}
+
 function copilotTaskId(task: CopilotTaskInfo): string | undefined {
   return task.id;
 }
@@ -1997,11 +2001,13 @@ export const makeCopilotSdkRuntime = Effect.fn("makeCopilotSdkRuntime")(function
         return;
       }
       const taskList = yield* copilotSdk.readBackgroundTasks(context);
+      const seenTaskIds = new Set<string>();
       for (const task of taskList.tasks) {
         const taskId = copilotTaskId(task);
         if (!taskId) {
           continue;
         }
+        seenTaskIds.add(taskId);
         const description = copilotTaskDescription(task);
         const taskType = copilotTaskType(task);
         const previous = context.copilotTasks.get(taskId);
@@ -2059,6 +2065,28 @@ export const makeCopilotSdkRuntime = Effect.fn("makeCopilotSdkRuntime")(function
         context.copilotTasks.set(taskId, {
           description,
           status: task.status,
+        });
+      }
+      for (const [taskId, previous] of context.copilotTasks) {
+        if (seenTaskIds.has(taskId) || isCopilotTaskTerminalStatus(previous.status)) {
+          continue;
+        }
+        yield* emit({
+          ...createBaseEvent({
+            threadId: context.threadId,
+            turnId,
+            raw,
+          }),
+          type: "task.completed",
+          payload: {
+            taskId: RuntimeTaskId.make(taskId),
+            status: "completed",
+            summary: previous.description,
+          },
+        });
+        context.copilotTasks.set(taskId, {
+          ...previous,
+          status: "completed",
         });
       }
     });
@@ -3548,7 +3576,64 @@ export const makeCopilotSdkRuntime = Effect.fn("makeCopilotSdkRuntime")(function
         return;
       }
 
-      yield* copilotSdk.abort(context);
+      yield* context.historyMutationSemaphore.withPermit(
+        Effect.gen(function* () {
+          yield* Effect.promise(() => context.eventChain).pipe(
+            Effect.mapError((cause) =>
+              copilotProcessError(
+                threadId,
+                "Failed to drain Copilot events before interrupt.",
+                cause,
+              ),
+            ),
+          );
+
+          const activeTurnId = context.activeTurnId;
+          if (activeTurnId === undefined) {
+            return;
+          }
+          if (turnId !== undefined && turnId !== activeTurnId) {
+            return;
+          }
+
+          yield* copilotSdk.abort(context);
+          yield* Effect.promise(() => context.eventChain).pipe(
+            Effect.mapError((cause) =>
+              copilotProcessError(
+                threadId,
+                "Failed to drain Copilot events after interrupt.",
+                cause,
+              ),
+            ),
+          );
+          if (context.completedTurnIds.has(activeTurnId)) {
+            return;
+          }
+
+          yield* Effect.promise(() =>
+            emitPendingTaskCompletionAsAssistantMessage(context, activeTurnId),
+          ).pipe(Effect.ignore);
+          yield* emit({
+            ...createBaseEvent({
+              threadId,
+              turnId: activeTurnId,
+            }),
+            type: "turn.aborted",
+            payload: {
+              reason: "user_initiated",
+            },
+          });
+          yield* Effect.promise(() =>
+            emitTurnCompleted(context, activeTurnId, "cancelled", {
+              stopReason: "aborted",
+            }),
+          ).pipe(
+            Effect.mapError((cause) =>
+              copilotProcessError(threadId, "Failed to complete interrupted Copilot turn.", cause),
+            ),
+          );
+        }),
+      );
     },
   );
 

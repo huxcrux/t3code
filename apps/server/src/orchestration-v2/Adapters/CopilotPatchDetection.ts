@@ -46,7 +46,8 @@ export function extractCopilotApplyPatchEdit(detail: string | undefined): string
     : undefined;
 }
 
-const SHELL_COMPLETION_CONTROL_LINE_PATTERN = /^<shellId: [^>]+ completed with exit code \d+>$/;
+const SHELL_COMPLETION_CONTROL_LINE_PATTERN =
+  /^<(?:shellId: [^>]+ completed|exited) with exit code \d+>$/;
 
 export function stripCopilotShellCompletionControlLines(detail: string): string {
   return detail

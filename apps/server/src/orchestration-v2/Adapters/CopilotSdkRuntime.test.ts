@@ -1745,11 +1745,6 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
       yield* adapter.interruptTurn(threadId, TurnId.make("stale-turn-id"));
       NodeAssert.equal(runtimeMock.state.lastSession.abort.mock.calls.length, 0);
 
-      yield* adapter.interruptTurn(threadId, turn.turnId);
-      NodeAssert.equal(runtimeMock.state.lastSession.abort.mock.calls.length, 1);
-      yield* waitForSdkEventQueue();
-      NodeAssert.equal(runtimeEvents.filter((event) => event.type === "turn.aborted").length, 0);
-
       const config = runtimeMock.state.createSessionConfigs.at(-1);
       NodeAssert.ok(config?.onEvent);
       const timestamp = yield* nowIso;
@@ -1773,6 +1768,12 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
           deltaContent: "Partial response before abort.",
         },
       } as SessionEvent);
+      yield* waitForSdkEventQueue();
+
+      yield* adapter.interruptTurn(threadId, turn.turnId);
+      NodeAssert.equal(runtimeMock.state.lastSession.abort.mock.calls.length, 1);
+      yield* waitForSdkEventQueue();
+
       config.onEvent({
         id: "evt-copilot-abort",
         timestamp,
@@ -1823,6 +1824,94 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
       yield* adapter.interruptTurn(threadId, turn.turnId);
       yield* adapter.interruptTurn(threadId);
       NodeAssert.equal(runtimeMock.state.lastSession.abort.mock.calls.length, 1);
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("terminalizes an interrupted Copilot turn before accepting a follow-up send", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CopilotSdkRuntime;
+      const threadId = asThreadId("copilot-interrupt-before-follow-up-send");
+
+      yield* adapter.startSession({
+        provider: COPILOT_DRIVER,
+        threadId,
+        cwd: process.cwd(),
+        runtimeMode: "approval-required",
+      });
+
+      const firstTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "start a long-running turn",
+        attachments: [],
+      });
+
+      const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
+        Stream.runForEach((event) => Effect.sync(() => runtimeEvents.push(event))),
+        Effect.forkChild,
+      );
+      yield* waitForSdkEventQueue();
+
+      const config = runtimeMock.state.createSessionConfigs.at(-1);
+      NodeAssert.ok(config?.onEvent);
+      const timestamp = yield* nowIso;
+      config.onEvent({
+        id: "evt-copilot-follow-up-active-start",
+        timestamp,
+        parentId: null,
+        type: "assistant.turn_start",
+        data: {
+          turnId: "sdk-turn-follow-up-active",
+        },
+      } as SessionEvent);
+      config.onEvent({
+        id: "evt-copilot-follow-up-active-delta",
+        timestamp,
+        parentId: null,
+        ephemeral: true,
+        type: "assistant.message_delta",
+        data: {
+          messageId: "message-follow-up-active",
+          deltaContent: "Partial response before follow-up.",
+        },
+      } as SessionEvent);
+      yield* waitForSdkEventQueue();
+
+      yield* adapter.interruptTurn(threadId, firstTurn.turnId);
+      const secondTurn = yield* adapter.sendTurn({
+        threadId,
+        input: "follow up immediately",
+        attachments: [],
+      });
+      yield* waitForSdkEventQueue();
+      yield* Fiber.interrupt(runtimeEventsFiber).pipe(Effect.ignore);
+
+      NodeAssert.equal(runtimeMock.state.lastSession.abort.mock.calls.length, 1);
+      NodeAssert.equal(runtimeMock.state.lastSession.send.mock.calls.length, 2);
+
+      const firstCompletedIndex = runtimeEvents.findIndex(
+        (event) =>
+          event.type === "turn.completed" && String(event.turnId) === String(firstTurn.turnId),
+      );
+      const secondStartedIndex = runtimeEvents.findIndex(
+        (event) =>
+          event.type === "turn.started" && String(event.turnId) === String(secondTurn.turnId),
+      );
+      NodeAssert.ok(firstCompletedIndex >= 0);
+      NodeAssert.ok(secondStartedIndex >= 0);
+      NodeAssert.ok(firstCompletedIndex < secondStartedIndex);
+
+      const firstCompleted = runtimeEvents[firstCompletedIndex];
+      NodeAssert.equal(firstCompleted?.type, "turn.completed");
+      if (firstCompleted?.type === "turn.completed") {
+        NodeAssert.equal(firstCompleted.payload.state, "cancelled");
+      }
+
+      const sessions = yield* adapter.listSessions();
+      NodeAssert.equal(sessions.at(0)?.status, "running");
+      NodeAssert.equal(String(sessions.at(0)?.activeTurnId), String(secondTurn.turnId));
 
       yield* adapter.stopSession(threadId);
     }),
@@ -2550,7 +2639,6 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
       ) {
         yield* waitForSdkEventQueue();
       }
-      yield* Fiber.interrupt(runtimeEventsFiber).pipe(Effect.ignore);
 
       NodeAssert.equal(
         runtimeEvents.find((event) => event.type === "turn.plan.updated"),
@@ -2579,6 +2667,40 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
           ["task-shell-1", "completed"],
         ],
       );
+      runtimeMock.state.lastSession.rpc.tasks.list.mockResolvedValueOnce({
+        tasks: [],
+      });
+      config.onEvent({
+        id: "evt-copilot-background-tasks-empty",
+        timestamp,
+        parentId: null,
+        ephemeral: true,
+        type: "session.background_tasks_changed",
+        data: {},
+      } as SessionEvent);
+
+      for (
+        let attempt = 0;
+        attempt < 20 &&
+        !runtimeEvents.some(
+          (event) =>
+            event.type === "task.completed" && String(event.payload.taskId) === "task-explore-1",
+        );
+        attempt += 1
+      ) {
+        yield* waitForSdkEventQueue();
+      }
+      yield* Fiber.interrupt(runtimeEventsFiber).pipe(Effect.ignore);
+
+      const disappearedTaskCompleted = runtimeEvents.find(
+        (event) =>
+          event.type === "task.completed" && String(event.payload.taskId) === "task-explore-1",
+      );
+      NodeAssert.equal(disappearedTaskCompleted?.type, "task.completed");
+      if (disappearedTaskCompleted?.type === "task.completed") {
+        NodeAssert.equal(disappearedTaskCompleted.payload.status, "completed");
+        NodeAssert.equal(disappearedTaskCompleted.payload.summary, "Exploring provider events");
+      }
 
       yield* adapter.stopSession(threadId);
     }),
@@ -2890,7 +3012,9 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
           toolCallId: "tool-command",
           success: true,
           result: {
-            content: " M apps/server/src/orchestration-v2/Adapters/CopilotSdkRuntime.ts",
+            content:
+              " M apps/server/src/orchestration-v2/Adapters/CopilotSdkRuntime.ts\n" +
+              "<exited with exit code 0>",
           },
         },
       } as SessionEvent);
@@ -2930,7 +3054,9 @@ it.layer(CopilotSdkRuntimeTestLayer)("CopilotSdkRuntimeLive", (it) => {
           toolName: "bash",
           command: "git status --short",
           result: {
-            content: " M apps/server/src/orchestration-v2/Adapters/CopilotSdkRuntime.ts",
+            content:
+              " M apps/server/src/orchestration-v2/Adapters/CopilotSdkRuntime.ts\n" +
+              "<exited with exit code 0>",
           },
         });
       }

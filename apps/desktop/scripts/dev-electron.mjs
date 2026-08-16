@@ -26,6 +26,8 @@ const requiredFiles = [
   "dist-electron/preload.cjs",
   "../server/dist/bin.mjs",
 ];
+const repoRoot = NodePath.resolve(desktopDir, "../..");
+const serverEntryPath = NodePath.resolve(desktopDir, "../server/dist/bin.mjs");
 const watchedDirectories = [
   { directory: "dist-electron", files: new Set(["main.cjs", "preload.cjs"]) },
   { directory: "../server/dist", files: new Set(["bin.mjs"]) },
@@ -37,12 +39,39 @@ const remoteDebuggingPort = process.env.T3CODE_DESKTOP_REMOTE_DEBUGGING_PORT?.tr
 // oxlint-disable-next-line t3code/no-global-process-runtime -- Standalone dev script has no Effect runtime.
 const hostPlatform = NodeOS.platform();
 
-await waitForResources({
-  baseDir: desktopDir,
-  files: requiredFiles,
-  tcpHost: devServer.hostname,
-  tcpPort: port,
-});
+function fileExists(filePath) {
+  return NodeFS.existsSync(filePath);
+}
+
+function ensureServerBundle() {
+  if (fileExists(serverEntryPath)) {
+    return;
+  }
+
+  console.warn(`[desktop-dev] server bundle missing; rebuilding ${serverEntryPath}`);
+  const result = NodeChildProcess.spawnSync("vp", ["run", "--filter=t3", "build:bundle"], {
+    cwd: repoRoot,
+    env: process.env,
+    stdio: "inherit",
+  });
+  if (result.status !== 0) {
+    throw new Error(
+      `Failed to rebuild desktop dev server bundle at ${serverEntryPath} (exit ${result.status ?? result.signal ?? "unknown"}).`,
+    );
+  }
+}
+
+async function waitForDevResources() {
+  ensureServerBundle();
+  return waitForResources({
+    baseDir: desktopDir,
+    files: requiredFiles,
+    tcpHost: devServer.hostname,
+    tcpPort: port,
+  });
+}
+
+await waitForDevResources();
 
 const childEnv = { ...process.env };
 delete childEnv.ELECTRON_RUN_AS_NODE;
@@ -173,6 +202,9 @@ function scheduleRestart() {
       .catch(() => undefined)
       .then(async () => {
         await stopApp();
+        if (!shuttingDown) {
+          await waitForDevResources();
+        }
         if (!shuttingDown) {
           startApp();
         }
