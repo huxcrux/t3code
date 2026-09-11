@@ -198,7 +198,266 @@ const CopilotAdapterTestLayer = Layer.effect(
   Layer.provideMerge(NodeServices.layer),
 );
 
+const collectTodoRuntimeEvents = Effect.fn("collectTodoRuntimeEvents")(function* (
+  adapter: CopilotAdapterShape,
+  config: SessionConfig,
+) {
+  const events: ProviderRuntimeEvent[] = [];
+  let drained: Deferred.Deferred<void> | undefined;
+  yield* adapter.streamEvents.pipe(
+    Stream.runForEach((event) =>
+      Effect.gen(function* () {
+        events.push(event);
+        if (
+          event.type === "session.configured" &&
+          event.raw?.method === "session.mode_changed" &&
+          drained
+        ) {
+          yield* Deferred.succeed(drained, undefined);
+        }
+      }),
+    ),
+    Effect.forkChild({ startImmediately: true }),
+  );
+  const flush = Effect.fn("flushTodoRuntimeEvents")(function* () {
+    drained = yield* Deferred.make<void>();
+    // A mode-change receipt follows all previously queued SDK events.
+    config.onEvent?.({
+      id: "todo-test-drain",
+      timestamp: yield* nowIso,
+      parentId: null,
+      ephemeral: true,
+      type: "session.mode_changed",
+      data: { previousMode: "interactive", newMode: "interactive" },
+    });
+    yield* Deferred.await(drained);
+  });
+  return { events, flush };
+});
+
 it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
+  for (const attribution of ["agentId", "parentToolCallId"] as const) {
+    it.effect(`keeps ${attribution} subagent narration out of the parent transcript`, () =>
+      Effect.gen(function* () {
+        const adapter = yield* CopilotAdapter;
+        const threadId = asThreadId(`copilot-child-narration-${attribution}`);
+        yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+        const turn = yield* adapter.sendTurn({ threadId, input: "Delegate research" });
+        const config = runtimeMock.state.createSessionConfigs.at(-1);
+        NodeAssert.ok(config?.onEvent);
+        const { events, flush } = yield* collectTodoRuntimeEvents(adapter, config);
+        const stamp = { id: "child-narration", timestamp: yield* nowIso, parentId: null };
+        const agent = attribution === "agentId" ? { agentId: "child-agent" } : {};
+        const parent = attribution === "parentToolCallId" ? { parentToolCallId: "delegate" } : {};
+        config.onEvent({
+          ...stamp,
+          type: "assistant.turn_start",
+          data: { turnId: "root-loop" },
+        });
+        // Child text can arrive before its task registration, and SDK message IDs can overlap.
+        config.onEvent({
+          ...stamp,
+          ...agent,
+          type: "assistant.message_delta",
+          ephemeral: true,
+          data: { ...parent, messageId: "answer", deltaContent: "Child research" },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "subagent.started",
+          agentId: "child-agent",
+          data: {
+            toolCallId: "delegate",
+            agentName: "explore",
+            agentDisplayName: "Explorer",
+            agentDescription: "Research the change",
+          },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "assistant.turn_start",
+          agentId: "child-agent",
+          data: { turnId: "root-loop" },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "assistant.reasoning",
+          agentId: "child-agent",
+          data: { reasoningId: "child-reasoning", content: "Private child reasoning" },
+        });
+        config.onEvent({
+          ...stamp,
+          ...agent,
+          type: "assistant.message",
+          data: { ...parent, messageId: "answer", content: "Child research complete" },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "assistant.turn_end",
+          agentId: "child-agent",
+          data: { turnId: "root-loop" },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "subagent.completed",
+          agentId: "child-agent",
+          data: { toolCallId: "delegate", agentName: "explore", agentDisplayName: "Explorer" },
+        });
+        yield* flush();
+        NodeAssert.equal(
+          events.some((event) => event.type === "content.delta"),
+          false,
+        );
+        NodeAssert.equal(
+          events.some((event) => event.type === "item.completed"),
+          false,
+        );
+        NodeAssert.deepStrictEqual((yield* adapter.readThread(threadId)).turns, [
+          { id: turn.turnId, items: [] },
+        ]);
+        NodeAssert.equal(
+          events.filter((event) => event.type === "session.state.changed").length,
+          1,
+        );
+        NodeAssert.deepStrictEqual(
+          events
+            .filter((event) => event.type === "task.started" || event.type === "task.completed")
+            .map((event) => [event.type, event.payload.taskId]),
+          [
+            ["task.started", "delegate"],
+            ["task.completed", "delegate"],
+          ],
+        );
+
+        config.onEvent({
+          ...stamp,
+          type: "assistant.message_delta",
+          ephemeral: true,
+          data: { messageId: "answer", deltaContent: "Root answer" },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "assistant.message",
+          data: { messageId: "answer", content: "Root answer" },
+        });
+        config.onEvent({ ...stamp, type: "session.idle", ephemeral: true, data: {} });
+        yield* flush();
+        NodeAssert.deepStrictEqual(
+          events
+            .filter((event) => event.type === "content.delta")
+            .map((event) => event.payload.delta),
+          ["Root answer"],
+        );
+        NodeAssert.deepStrictEqual(
+          events.filter((event) => event.type === "turn.completed").map((event) => event.turnId),
+          [turn.turnId],
+        );
+        yield* adapter.stopSession(threadId);
+      }),
+    );
+
+    it.effect(`attributes ${attribution} child tools without leaking completion signals`, () =>
+      Effect.gen(function* () {
+        const adapter = yield* CopilotAdapter;
+        const threadId = asThreadId(`copilot-child-tools-${attribution}`);
+        yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+        const turn = yield* adapter.sendTurn({ threadId, input: "Delegate research" });
+        const config = runtimeMock.state.createSessionConfigs.at(-1);
+        NodeAssert.ok(config?.onEvent);
+        const { events, flush } = yield* collectTodoRuntimeEvents(adapter, config);
+        const stamp = { id: "child-tools", timestamp: yield* nowIso, parentId: null };
+        const agent = attribution === "agentId" ? { agentId: "child-agent" } : {};
+        const parent = attribution === "parentToolCallId" ? { parentToolCallId: "delegate" } : {};
+        config.onEvent({ ...stamp, type: "assistant.turn_start", data: { turnId: "root-loop" } });
+        config.onEvent({
+          ...stamp,
+          type: "subagent.started",
+          agentId: "child-agent",
+          data: {
+            toolCallId: "delegate",
+            agentName: "explore",
+            agentDisplayName: "Explorer",
+            agentDescription: "Research the change",
+          },
+        });
+        config.onEvent({
+          ...stamp,
+          ...agent,
+          type: "tool.execution_start",
+          data: {
+            ...parent,
+            toolCallId: "child-shell",
+            toolName: "bash",
+            arguments: { command: "pwd" },
+          },
+        });
+        // Progress and completion can omit ownership: inherit it from the tool start.
+        config.onEvent({
+          ...stamp,
+          type: "tool.execution_progress",
+          ephemeral: true,
+          data: { toolCallId: "child-shell", progressMessage: "Reading the workspace" },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "tool.execution_complete",
+          data: { toolCallId: "child-shell", success: true, result: { content: "/workspace" } },
+        });
+        config.onEvent({ ...stamp, type: "session.idle", ephemeral: true, data: {} });
+        yield* flush();
+        yield* TestClock.adjust("300 millis");
+        yield* flush();
+        NodeAssert.equal(
+          events.some((event) => event.type === "turn.completed"),
+          false,
+        );
+        const items = events.filter(
+          (event) => event.type === "item.started" || event.type === "item.completed",
+        );
+        NodeAssert.deepStrictEqual(
+          items.map((event) => event.payload.agentId),
+          ["delegate", "delegate"],
+        );
+        NodeAssert.equal(
+          events.find((event) => event.type === "tool.progress")?.payload.taskId,
+          "delegate",
+        );
+
+        config.onEvent({
+          ...stamp,
+          ...agent,
+          type: "assistant.message",
+          data: { ...parent, messageId: "child-answer", content: "Child summary" },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "tool.execution_start",
+          data: { toolCallId: "root-complete", toolName: "task_complete" },
+        });
+        config.onEvent({
+          ...stamp,
+          type: "tool.execution_complete",
+          data: { toolCallId: "root-complete", success: true, result: { content: "Root summary" } },
+        });
+        config.onEvent({ ...stamp, type: "session.idle", ephemeral: true, data: {} });
+        yield* flush();
+        yield* TestClock.adjust("300 millis");
+        yield* flush();
+        NodeAssert.deepStrictEqual(
+          events
+            .filter((event) => event.type === "content.delta")
+            .map((event) => event.payload.delta),
+          ["Root summary"],
+        );
+        NodeAssert.deepStrictEqual(
+          events.filter((event) => event.type === "turn.completed").map((event) => event.turnId),
+          [turn.turnId],
+        );
+        yield* adapter.stopSession(threadId);
+      }),
+    );
+  }
+
   it.effect("stops sessions and settles pending approvals when its instance scope closes", () =>
     Effect.gen(function* () {
       const threadId = asThreadId("copilot-instance-scope-close");

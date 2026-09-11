@@ -177,6 +177,8 @@ interface ToolMeta {
   readonly toolName: string;
   readonly itemType: ToolLifecycleItemType;
   readonly command?: string;
+  readonly agentId?: string;
+  readonly parentToolCallId?: string;
 }
 
 interface CopilotToolExecutionItem {
@@ -1043,6 +1045,23 @@ function sdkTurnMappingKey(agentId: string | undefined, sdkTurnId: string): stri
   return agentId ? `${agentId}:${sdkTurnId}` : sdkTurnId;
 }
 
+function owningAgentIdForTool(
+  context: CopilotSessionContext,
+  event: {
+    readonly agentId?: string;
+    readonly data: { readonly toolCallId: string; readonly parentToolCallId?: string };
+  },
+): string | undefined {
+  const tool = context.toolMetaById.get(event.data.toolCallId);
+  const parentToolCallId = event.data.parentToolCallId ?? tool?.parentToolCallId;
+  const agentId = event.agentId ?? tool?.agentId;
+  // Tasks use the spawning tool call ID, not the SDK agent ID. Retain the SDK
+  // identity when registration is late so early tool activity is still quiet.
+  return (
+    parentToolCallId ?? (agentId ? (context.taskIdByAgentId.get(agentId) ?? agentId) : undefined)
+  );
+}
+
 function removeQueuedTurn(context: CopilotSessionContext, turnId: TurnId): void {
   const queueIndex = context.queuedTurnIds.indexOf(turnId);
   if (queueIndex >= 0) {
@@ -1167,6 +1186,13 @@ function resolveTurnIdForEvent(
     input?.providerItemId && context.turnIdByProviderItemId.get(input.providerItemId);
   if (providerItemTurnId) {
     return providerItemTurnId;
+  }
+  if (input?.agentId !== undefined) {
+    const taskId = context.taskIdByAgentId.get(input.agentId);
+    return (
+      (taskId ? context.copilotTasks.get(taskId)?.turnId : undefined) ??
+      (input.allowActiveFallback === false ? undefined : context.activeTurnId)
+    );
   }
   if (input?.sdkTurnId) {
     return resolveTurnIdForSdkTurn(context, input.sdkTurnId, {
@@ -1757,7 +1783,6 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
     readonly turnId: TurnId;
     readonly itemId: string;
     readonly nextText: string;
-    readonly marksTurnCompletion?: boolean | undefined;
     readonly raw?: SessionEvent | undefined;
   }) => {
     if (!input.context.startedItemIds.has(input.itemId)) {
@@ -1788,9 +1813,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
       return;
     }
     input.context.turnIdsWithAssistantText.add(input.turnId);
-    if (input.marksTurnCompletion !== false) {
-      input.context.turnIdsWithRootAssistantTextSinceToolStart.add(input.turnId);
-    }
+    input.context.turnIdsWithRootAssistantTextSinceToolStart.add(input.turnId);
     await emitAsync({
       ...createBaseEvent({
         threadId: input.context.threadId,
@@ -2569,6 +2592,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "assistant.turn_start": {
+        if (event.agentId !== undefined) return;
         await completePendingActiveTurnEnd(context);
         const activeTurnIdBeforeSdkTurn = context.activeTurnId;
         const turnId = resolveTurnIdForSdkTurn(context, event.data.turnId, {
@@ -2602,6 +2626,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "assistant.reasoning": {
+        if (event.agentId !== undefined) return;
         const turnId = resolveTurnIdForEvent(context, {
           sdkTurnId: context.activeSdkTurnId,
           sdkEventTimestamp: event.timestamp,
@@ -2620,6 +2645,9 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "assistant.message_delta": {
+        // Child narration belongs to the task, never the parent transcript or
+        // its completion bookkeeping. Older CLIs use parentToolCallId instead.
+        if (event.agentId !== undefined || event.data.parentToolCallId !== undefined) return;
         const turnId = resolveTurnIdForEvent(context, {
           sdkTurnId: context.activeSdkTurnId,
           sdkEventTimestamp: event.timestamp,
@@ -2637,12 +2665,12 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           turnId,
           itemId,
           nextText: (context.emittedTextByItemId.get(itemId) ?? "") + event.data.deltaContent,
-          marksTurnCompletion: event.agentId === undefined,
           raw: event,
         });
         return;
       }
       case "assistant.message": {
+        if (event.agentId !== undefined || event.data.parentToolCallId !== undefined) return;
         const turnId = resolveTurnIdForEvent(context, {
           sdkTurnId: event.data.turnId ?? context.activeSdkTurnId,
           sdkEventTimestamp: event.timestamp,
@@ -2660,7 +2688,6 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           turnId,
           itemId,
           nextText: event.data.content,
-          marksTurnCompletion: event.agentId === undefined,
           raw: event,
         });
         await completeAssistantTextItem({
@@ -2674,6 +2701,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "assistant.turn_end": {
+        if (event.agentId !== undefined) return;
         const sdkTurnKey = sdkTurnMappingKey(event.agentId, event.data.turnId);
         const turnId = context.sdkTurnIdsToTurnIds.get(sdkTurnKey);
         if (!turnId) {
@@ -2682,9 +2710,6 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         if (context.activeSdkTurnKey === sdkTurnKey) {
           context.activeSdkTurnId = undefined;
           context.activeSdkTurnKey = undefined;
-        }
-        if (event.agentId !== undefined) {
-          return;
         }
         context.turnEndEventsByTurnId.set(turnId, event);
         const shouldComplete = shouldCompleteOnAssistantTurnEnd(context, turnId);
@@ -2787,6 +2812,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "tool.execution_start": {
+        const owningAgentId = owningAgentIdForTool(context, event);
         const turnId = resolveTurnIdForEvent(context, {
           providerItemId: event.data.toolCallId,
           parentProviderItemId: event.data.parentToolCallId,
@@ -2797,7 +2823,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         if (!turnId) {
           return;
         }
-        markTurnContinuingWithTool(context, turnId);
+        if (!owningAgentId) markTurnContinuingWithTool(context, turnId);
         const itemId = `copilot-tool-${event.data.toolCallId}`;
         const itemType = toolItemType(
           event.data.toolName,
@@ -2809,6 +2835,8 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           toolName: event.data.toolName,
           itemType,
           ...(command ? { command } : {}),
+          ...(event.agentId ? { agentId: event.agentId } : {}),
+          ...(event.data.parentToolCallId ? { parentToolCallId: event.data.parentToolCallId } : {}),
         };
         context.toolMetaById.set(event.data.toolCallId, {
           ...toolMeta,
@@ -2829,6 +2857,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           payload: {
             itemType,
             status: "inProgress",
+            ...(owningAgentId ? { agentId: owningAgentId } : {}),
             title: toolLifecycleTitle(toolMeta),
             ...(toolMeta.itemType === "command_execution" && toolMeta.command
               ? { detail: toolMeta.command }
@@ -2843,6 +2872,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "tool.execution_progress": {
+        const owningAgentId = owningAgentIdForTool(context, event);
         const turnId = resolveTurnIdForEvent(context, {
           providerItemId: event.data.toolCallId,
           sdkTurnId: context.activeSdkTurnId,
@@ -2865,6 +2895,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           type: "tool.progress",
           payload: {
             toolUseId: event.data.toolCallId,
+            ...(owningAgentId ? { taskId: RuntimeTaskId.make(owningAgentId) } : {}),
             ...(toolMeta ? { toolName: toolMeta.toolName } : {}),
             summary,
           },
@@ -2872,6 +2903,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "tool.execution_complete": {
+        const owningAgentId = owningAgentIdForTool(context, event);
         const turnId = resolveTurnIdForEvent(context, {
           providerItemId: event.data.toolCallId,
           parentProviderItemId: event.data.parentToolCallId,
@@ -2901,13 +2933,13 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         const detail = normalizedToolCompletionDetail(toolMeta, rawDetail);
         const continuesWithSubagent =
           toolMeta?.itemType === "collab_agent_tool_call" && !isTaskCompleteTool(toolMeta.toolName);
-        if (event.agentId === undefined && !event.data.success) {
+        if (!owningAgentId && !event.data.success) {
           context.turnEndEventsByTurnId.set(turnId, event);
-        } else if (event.agentId === undefined && !continuesWithSubagent) {
+        } else if (!owningAgentId && !continuesWithSubagent) {
           context.turnIdsWithSuccessfulToolCompletion.add(turnId);
         }
         if (isTaskCompleteTool(toolMeta?.toolName)) {
-          if (event.agentId === undefined && event.data.success && detail) {
+          if (!owningAgentId && event.data.success && detail) {
             context.pendingTaskCompletionTextByTurnId.set(turnId, detail);
           }
           return;
@@ -2923,6 +2955,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           payload: {
             itemType: toolMeta?.itemType ?? "dynamic_tool_call",
             status: event.data.success ? "completed" : "failed",
+            ...(owningAgentId ? { agentId: owningAgentId } : {}),
             title: toolLifecycleTitle(toolMeta),
             ...(detail ? { detail } : {}),
             data: toolLifecycleData({
