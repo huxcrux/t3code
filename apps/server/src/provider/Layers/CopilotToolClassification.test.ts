@@ -12,7 +12,7 @@ describe("CopilotToolClassification", () => {
     NodeAssert.equal(classifyCopilotToolItemType({ toolName: "bash" }), "command_execution");
     NodeAssert.equal(
       classifyCopilotToolItemType({ toolName: "Task_complete" }),
-      "collab_agent_tool_call",
+      "dynamic_tool_call",
     );
     NodeAssert.equal(
       classifyCopilotToolItemType({
@@ -51,6 +51,51 @@ describe("CopilotToolClassification", () => {
       "mcp_tool_call",
     );
     NodeAssert.equal(classifyCopilotToolItemType({ toolName: "TodoWrite" }), "dynamic_tool_call");
+  });
+
+  it("only classifies delegation tools as agent calls", () => {
+    for (const toolName of [
+      "task",
+      "Agent",
+      "delegate",
+      "runSubagent",
+      "run_subagent",
+      "spawn_agent",
+    ]) {
+      NodeAssert.equal(
+        classifyCopilotToolItemType({ toolName }),
+        "collab_agent_tool_call",
+        toolName,
+      );
+    }
+    for (const toolName of [
+      "TaskCreate",
+      "TaskUpdate",
+      "TaskList",
+      "TaskGet",
+      "TaskOutput",
+      "TaskStop",
+      "task_complete",
+      "list_agents",
+      "read_agent",
+      "agent_status",
+      "list_tasks",
+      "read_task",
+      "skill",
+    ]) {
+      NodeAssert.equal(classifyCopilotToolItemType({ toolName }), "dynamic_tool_call", toolName);
+    }
+    NodeAssert.equal(
+      classifyCopilotToolItemType({ toolName: "run_task_command" }),
+      "command_execution",
+    );
+    NodeAssert.equal(
+      classifyCopilotToolItemType({
+        toolName: "task",
+        mcpServerName: "project-management",
+      }),
+      "mcp_tool_call",
+    );
   });
 
   it("detects read-only Copilot tools", () => {

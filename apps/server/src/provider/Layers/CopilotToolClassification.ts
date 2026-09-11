@@ -2,6 +2,17 @@ import type { ToolLifecycleItemType } from "@t3tools/contracts";
 
 import { commandLooksLikeCopilotPatchEdit } from "./CopilotPatchDetection.ts";
 
+// Match delegation tools, not task bookkeeping or agent inspection tools.
+const DELEGATION_TOOL_NAMES = new Set([
+  "task",
+  "agent",
+  "subagent",
+  "delegate",
+  "delegatetask",
+  "runsubagent",
+  "spawnagent",
+]);
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -106,11 +117,7 @@ export function classifyCopilotToolItemType(input: {
   if (input.mcpServerName || normalized.includes("mcp")) {
     return "mcp_tool_call";
   }
-  if (
-    normalized.includes("agent") ||
-    normalized.includes("delegate") ||
-    normalized.includes("task")
-  ) {
+  if (DELEGATION_TOOL_NAMES.has(normalized.replace(/[\s_-]+/g, ""))) {
     return "collab_agent_tool_call";
   }
   if (
