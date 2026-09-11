@@ -1453,6 +1453,101 @@ describe("ProviderRuntimeIngestion", () => {
     expect(message?.streaming).toBe(false);
   });
 
+  it("preserves a final assistant summary after commentary in the same turn", async () => {
+    const harness = await createHarness();
+    const now = "2026-01-01T00:00:00.000Z";
+    const turnId = asTurnId("turn-commentary-then-final");
+
+    harness.emit({
+      type: "turn.started",
+      eventId: asEventId("evt-turn-started-commentary-then-final"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+    });
+    harness.emit({
+      type: "content.delta",
+      eventId: asEventId("evt-commentary-delta-before-final"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-commentary-before-final"),
+      payload: {
+        streamKind: "assistant_text",
+        delta: "I am checking the changes.",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-commentary-completed-before-final"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-commentary-before-final"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+      },
+    });
+    harness.emit({
+      type: "item.completed",
+      eventId: asEventId("evt-final-summary-completed"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      itemId: asItemId("item-final-summary"),
+      payload: {
+        itemType: "assistant_message",
+        status: "completed",
+        detail: "No significant issues found in the reviewed changes.",
+      },
+    });
+    harness.emit({
+      type: "turn.completed",
+      eventId: asEventId("evt-turn-completed-commentary-then-final"),
+      provider: ProviderDriverKind.make("codex"),
+      createdAt: now,
+      threadId: asThreadId("thread-1"),
+      turnId,
+      payload: {
+        state: "completed",
+      },
+    });
+
+    const thread = await waitForThread(
+      harness.readModel,
+      (entry) =>
+        entry.session?.status === "ready" &&
+        entry.messages.some(
+          (message: ProviderRuntimeTestMessage) =>
+            message.id === "assistant:item-final-summary" && !message.streaming,
+        ),
+    );
+    const assistantMessages = thread.messages.filter(
+      (message: ProviderRuntimeTestMessage) => message.role === "assistant",
+    );
+
+    expect(assistantMessages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "assistant:item-commentary-before-final",
+          text: "I am checking the changes.",
+          streaming: false,
+        }),
+        expect.objectContaining({
+          id: "assistant:item-final-summary",
+          text: "No significant issues found in the reviewed changes.",
+          streaming: false,
+        }),
+      ]),
+    );
+    expect(assistantMessages.at(-1)?.id).toBe("assistant:item-final-summary");
+  });
+
   it("preserves completed tool metadata on projected tool activities", async () => {
     const harness = await createHarness();
     const now = "2026-01-01T00:00:00.000Z";
