@@ -1,9 +1,9 @@
 /**
  * UsageService - scans provider transcripts and returns priced usage buckets.
  *
- * The scan reads the provider CLIs' own session files (Claude Code, Codex, and
- * Grok Build) rather than T3 Code's orchestration projections, so usage covers
- * turns driven outside T3 Code too. This is the approach `ccusage` takes.
+ * The scan reads the provider CLIs' own session files rather than T3 Code's
+ * orchestration projections. Claude Code, Codex, and Grok Build scans also cover
+ * turns driven outside T3 Code; Copilot scans only T3-managed instance homes.
  *
  * Transcripts are append-only, so parsed records are memoised per file by
  * `(size, mtime)`. A cold 30-day scan of ~1.4 GB lands around 2-3 seconds; warm
@@ -290,6 +290,14 @@ export const make = Effect.gen(function* () {
         dirs.push({ provider, dir, ...(provider === "grok" ? { fileName: "updates.jsonl" } : {}) });
       }
     }
+    // One source covers all T3-managed homes, including retired instances.
+    // Do not mix global COPILOT_HOME history with environment-local history:
+    // the client claims sources but merges whole provider buckets.
+    dirs.push({
+      provider: "copilot",
+      dir: path.join(config.stateDir, "providers", "copilot"),
+      fileName: "events.jsonl",
+    });
     return dirs;
   });
 
@@ -547,7 +555,10 @@ export const make = Effect.gen(function* () {
         skippedFiles,
         malformedRecords: 0,
         distinctSessions: sessionIds.size,
-        message: null,
+        message:
+          provider === "copilot"
+            ? "T3-managed Copilot tokens are attributed to session shutdown; active or interrupted sessions may be incomplete. USD is estimated from model token rates."
+            : null,
       });
     }
 

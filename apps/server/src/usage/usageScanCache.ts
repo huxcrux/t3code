@@ -18,7 +18,9 @@
 import * as NodePath from "node:path";
 
 import type { UsageProviderKind } from "@t3tools/contracts";
+import * as Option from "effect/Option";
 
+import { decodeCopilotScanState, type CopilotScanState } from "./copilotUsageTranscripts.ts";
 import { GUARD_LENGTH, type TranscriptParsePosition } from "./usageTranscriptReader.ts";
 import type { CodexScanState, UsageRecord } from "./usageTranscripts.ts";
 
@@ -76,6 +78,8 @@ interface SerializedFile {
   readonly gh: number;
   /** Codex reducer state at `o`; `null` for stateless providers. */
   readonly cs: CodexScanState | null;
+  /** Additive: old providers retain their v3 cache entries. */
+  readonly cps?: CopilotScanState;
 }
 
 interface SerializedCache {
@@ -126,6 +130,7 @@ export function encodeScanCache(cache: ScanCache): SerializedCache {
       gl: entry.position.guardLength,
       gh: entry.position.guardHash,
       cs: entry.position.codexState,
+      ...(entry.position.copilotState === undefined ? {} : { cps: entry.position.copilotState }),
     };
   }
 
@@ -219,7 +224,8 @@ export function decodeScanCache(document: unknown): ScanCache {
     if (typeof raw !== "object" || raw === null) continue;
     const entry = raw as Partial<SerializedFile>;
     if (typeof entry.s !== "number" || typeof entry.m !== "number") continue;
-    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok") continue;
+    if (entry.p !== "claude" && entry.p !== "codex" && entry.p !== "grok" && entry.p !== "copilot")
+      continue;
     if (!isRecordArray(entry.r) || !isRecordArray(entry.t)) continue;
     // Position fields feed byte offsets and a Buffer allocation in the reader,
     // so anything outside their real ranges must reject the entry: a bogus
@@ -241,6 +247,8 @@ export function decodeScanCache(document: unknown): ScanCache {
     }
     const codexState = decodeCodexState(entry.cs);
     if (codexState === undefined) continue;
+    const copilotState = entry.p === "copilot" ? decodeCopilotScanState(entry.cps) : Option.none();
+    if (entry.p === "copilot" && Option.isNone(copilotState)) continue;
 
     const provider: UsageProviderKind = entry.p;
     const records = decodeRecords(entry.r, provider);
@@ -258,6 +266,9 @@ export function decodeScanCache(document: unknown): ScanCache {
         guardLength: entry.gl,
         guardHash: entry.gh,
         codexState,
+        ...(entry.p === "copilot" && Option.isSome(copilotState)
+          ? { copilotState: copilotState.value }
+          : {}),
       },
     });
   }

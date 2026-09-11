@@ -2,7 +2,7 @@
 
 ## Understand your usage
 
-**Usage** combines Codex, Claude Code, and Grok Build session history from your connected
+**Usage** combines Codex, Claude Code, Grok Build, and GitHub Copilot session history from your connected
 environments. It shows token use, cache savings, model breakdowns, and estimated API-equivalent
 cost. These estimates are not your subscription bill.
 
@@ -14,6 +14,11 @@ the account's home setting or its `CODEX_HOME`, `CLAUDE_CONFIG_DIR`, or `GROK_HO
 variable. Use absolute paths or `~/` paths in the account's environment settings; relative
 environment paths depend on each project's working directory and cannot be reliably discovered
 by Usage. Accounts sharing a history directory count once.
+
+Copilot totals cover sessions run through T3 Code on that server and include subagent work.
+They update when Copilot saves its session shutdown metrics; active sessions and sessions that
+crash before saving may be missing. Copilot request multipliers and AI credits are not dollar
+charges; the cost shown here uses the same estimated model token prices as other providers.
 
 On web and desktop, use the environment dropdown to filter costs, tokens, and limits. All
 environments are selected by default. The dropdown shows which environments are still scanning;
@@ -61,6 +66,9 @@ The same account signed in on more than one environment, or reported by a hub as
 Filter with the environment dropdown to see what a single machine has.
 
 If a window looks stale, refresh Limits to re-check every provider and hub.
+
+Copilot accounts show the quotas and reset dates reported by GitHub, when available. Unlimited
+quotas and accounts allowed to continue with overage are labeled separately from enforced limits.
 
 Pick `/usage-limits` from the composer's command menu, or send it as a message, to check the
 current model's limits without leaving the conversation. The result opens above the composer and

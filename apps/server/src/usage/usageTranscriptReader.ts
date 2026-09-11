@@ -21,6 +21,11 @@ import * as NodePath from "node:path";
 import type { UsageProviderKind } from "@t3tools/contracts";
 
 import {
+  initialCopilotScanState,
+  parseCopilotLine,
+  type CopilotScanState,
+} from "./copilotUsageTranscripts.ts";
+import {
   initialCodexScanState,
   mightCarryUsage,
   parseClaudeLine,
@@ -56,6 +61,8 @@ export interface TranscriptParsePosition {
   readonly guardHash: number;
   /** Codex reducer state as of `resumeOffset`; `null` for stateless providers. */
   readonly codexState: CodexScanState | null;
+  /** Copilot cumulative metrics at `resumeOffset`; absent for older cache entries. */
+  readonly copilotState?: CopilotScanState;
 }
 
 export interface TranscriptParseResult {
@@ -93,9 +100,9 @@ function fnv1a(buffer: Buffer): number {
  * removed while the walk is in flight, and a partial listing is far better than
  * failing the page.
  *
- * `fileName` restricts the walk to a single basename (Grok's `updates.jsonl`).
- * Grok sessions also ship multi-megabyte `chat_history` and `events` logs that
- * never carry usage, so the basename filter keeps a cold scan off those files.
+ * `fileName` restricts the walk to a single basename (Grok's `updates.jsonl`,
+ * Copilot's `events.jsonl`). Other session logs can be multi-megabyte files
+ * without usage, so the basename filter keeps a cold scan off those files.
  */
 export async function listTranscriptFiles(
   root: string,
@@ -204,20 +211,32 @@ export async function readTranscriptRecords(
 
   try {
     let codexState = initialCodexScanState();
+    let copilotState = initialCopilotScanState(NodePath.basename(NodePath.dirname(filePath)));
     let resumed = false;
     let start = 0;
     if (
       resumeFrom !== undefined &&
       resumeFrom.resumeOffset > 0 &&
       (provider !== "codex" || resumeFrom.codexState !== null) &&
+      (provider !== "copilot" || resumeFrom.copilotState !== undefined) &&
       (await guardMatches(handle, resumeFrom))
     ) {
       if (resumeFrom.codexState !== null) codexState = { ...resumeFrom.codexState };
+      if (resumeFrom.copilotState !== undefined) copilotState = { ...resumeFrom.copilotState };
       start = resumeFrom.resumeOffset;
       resumed = true;
     }
 
-    const parseLine = (line: string, state: CodexScanState, out: UsageRecord[]): void => {
+    const parseLine = (
+      line: string,
+      state: CodexScanState,
+      copilot: CopilotScanState,
+      out: UsageRecord[],
+    ): void => {
+      if (provider === "copilot") {
+        if (mightCarryUsage(line, provider)) out.push(...parseCopilotLine(line, copilot));
+        return;
+      }
       if (provider === "codex") {
         if (
           !mightCarryUsage(line, provider) &&
@@ -270,7 +289,12 @@ export async function readTranscriptRecords(
       for (;;) {
         const newlineIndex = buffer.indexOf(NEWLINE, lineStart);
         if (newlineIndex === -1) break;
-        parseLine(toLineString(buffer.subarray(lineStart, newlineIndex)), codexState, records);
+        parseLine(
+          toLineString(buffer.subarray(lineStart, newlineIndex)),
+          codexState,
+          copilotState,
+          records,
+        );
         lineStart = newlineIndex + 1;
       }
       resumeOffset += lineStart;
@@ -283,7 +307,9 @@ export async function readTranscriptRecords(
     const tailRecords: UsageRecord[] = [];
     if (pendingChunks.length > 0) {
       const pending = pendingChunks.length === 1 ? pendingChunks[0]! : Buffer.concat(pendingChunks);
-      if (pending.length > 0) parseLine(toLineString(pending), { ...codexState }, tailRecords);
+      if (pending.length > 0) {
+        parseLine(toLineString(pending), { ...codexState }, { ...copilotState }, tailRecords);
+      }
     }
 
     const guardLength = Math.min(GUARD_LENGTH, resumeOffset);
@@ -302,6 +328,7 @@ export async function readTranscriptRecords(
         guardLength,
         guardHash,
         codexState: provider === "codex" ? codexState : null,
+        ...(provider === "copilot" ? { copilotState } : {}),
       },
       resumed,
     };

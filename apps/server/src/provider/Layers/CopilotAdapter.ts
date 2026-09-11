@@ -26,6 +26,7 @@ import {
   RuntimeItemId,
   RuntimeRequestId,
   RuntimeTaskId,
+  type RuntimeTaskUsage,
   type ThreadTokenUsageSnapshot,
   ThreadId,
   type ToolLifecycleItemType,
@@ -39,6 +40,7 @@ import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Path from "effect/Path";
+import * as Option from "effect/Option";
 import * as Predicate from "effect/Predicate";
 import * as PubSub from "effect/PubSub";
 import * as Semaphore from "effect/Semaphore";
@@ -59,6 +61,15 @@ import { resolveCopilotMcpBearerAuth } from "../copilotMcpBearerAuth.ts";
 import { createCopilotClient, stopCopilotClient, trimOrUndefined } from "../copilotRuntime.ts";
 import { buildRuntimeInstructions } from "../RuntimeInstructions.ts";
 import { makeThreadLifecycleLock } from "../threadLifecycleLock.ts";
+import { CopilotUsageLimitsSink, refreshCopilotUsageLimits } from "../copilotUsageLimits.ts";
+import {
+  addCopilotUsage,
+  mergeCopilotUsageTotals,
+  copilotTaskUsage,
+  copilotTurnTokenUsage,
+  copilotUsageSnapshot,
+  type CopilotUsageTotals,
+} from "./CopilotUsage.ts";
 import {
   classifyCopilotToolItemType,
   isReadOnlyCopilotToolName,
@@ -102,6 +113,13 @@ type CopilotTaskStatus = CopilotTaskInfo["status"];
 interface CopilotTaskState {
   description: string;
   status: CopilotTaskStatus;
+  turnId: TurnId;
+  taskType?: string | undefined;
+  title?: string | undefined;
+  role?: string | undefined;
+  model?: string | undefined;
+  usage?: CopilotUsageTotals | undefined;
+  finalUsage?: RuntimeTaskUsage | undefined;
 }
 
 export interface CopilotAdapterLiveOptions {
@@ -183,7 +201,11 @@ interface CopilotSessionContext {
   readonly completedTurnIds: Set<TurnId>;
   readonly emittedTurnStartedIds: Set<TurnId>;
   readonly turnStartPayloadByTurnId: Map<TurnId, CopilotTurnStartPayload>;
-  readonly turnUsageByTurnId: Map<TurnId, ThreadTokenUsageSnapshot>;
+  readonly turnUsageByTurnId: Map<TurnId, CopilotUsageTotals>;
+  readonly turnsWithSubagents: Set<TurnId>;
+  readonly seenUsageCalls: Set<string>;
+  readonly taskIdByAgentId: Map<string, string>;
+  readonly pendingUsageByAgentId: Map<string, CopilotUsageTotals>;
   readonly pendingPermissionHandlersBySignature: Map<string, Array<PendingPermissionHandler>>;
   readonly pendingPermissionEventsBySignature: Map<
     string,
@@ -740,11 +762,15 @@ function completedCopilotTaskStatus(
 }
 
 function copilotTaskId(task: CopilotTaskInfo): string | undefined {
-  return task.id;
+  return task.type === "agent" ? task.toolCallId || task.id : task.id;
 }
 
-function copilotTaskType(task: CopilotTaskInfo): string | undefined {
-  return task.type === "agent" ? task.agentType : task.type;
+function copilotTaskLinkage(task: CopilotTaskInfo) {
+  // The SDK kind determines classification; custom agent names are roles, not task kinds.
+  return {
+    taskType: task.type,
+    ...(task.type === "agent" ? { role: task.agentType, toolUseId: task.toolCallId } : {}),
+  };
 }
 
 function copilotTaskDescription(task: CopilotTaskInfo): string {
@@ -868,27 +894,6 @@ function toolLifecycleData(input: {
     ...(input.result !== undefined ? { result: input.result } : {}),
     ...(input.error ? { error: input.error } : {}),
     ...(input.toolTelemetry ? { toolTelemetry: input.toolTelemetry } : {}),
-  };
-}
-
-function usageSnapshotFromAssistantUsage(
-  event: Extract<SessionEvent, { type: "assistant.usage" }>,
-): ThreadTokenUsageSnapshot {
-  const inputTokens = event.data.inputTokens ?? 0;
-  const cachedInputTokens = event.data.cacheReadTokens ?? 0;
-  const outputTokens = event.data.outputTokens ?? 0;
-  const usedTokens = inputTokens + cachedInputTokens + outputTokens;
-  return {
-    usedTokens,
-    lastUsedTokens: usedTokens,
-    ...(inputTokens > 0 ? { inputTokens, lastInputTokens: inputTokens } : {}),
-    ...(cachedInputTokens > 0
-      ? { cachedInputTokens, lastCachedInputTokens: cachedInputTokens }
-      : {}),
-    ...(outputTokens > 0 ? { outputTokens, lastOutputTokens: outputTokens } : {}),
-    ...(typeof event.data.duration === "number" && Number.isFinite(event.data.duration)
-      ? { durationMs: Math.max(0, Math.round(event.data.duration)) }
-      : {}),
   };
 }
 
@@ -1200,6 +1205,27 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
   const runtimeContext = yield* Effect.context();
   const runWithContext = Effect.runPromiseWith(runtimeContext);
   const runFork = Effect.runForkWith(runtimeContext);
+  const adapterScope = yield* Effect.scope;
+  const limitsSink = yield* Effect.serviceOption(CopilotUsageLimitsSink);
+  let limitsRefreshPending = false;
+  let nextLimitsRefreshAt = 0;
+  const scheduleLimitsRefresh = (client: CopilotClient, force = false) => {
+    const now = DateTime.toEpochMillis(DateTime.nowUnsafe());
+    if (Option.isNone(limitsSink) || limitsRefreshPending || (!force && now < nextLimitsRefreshAt))
+      return;
+    limitsRefreshPending = true;
+    nextLimitsRefreshAt = now + 30_000;
+    runFork(
+      refreshCopilotUsageLimits(client).pipe(
+        Effect.ensuring(
+          Effect.sync(() => {
+            limitsRefreshPending = false;
+          }),
+        ),
+        Effect.forkIn(adapterScope),
+      ),
+    );
+  };
   const turnEndIdleFallbackDelayMs = Math.max(
     0,
     options?.turnEndIdleFallbackDelayMs ?? TURN_END_IDLE_FALLBACK_DELAY_MS,
@@ -1331,7 +1357,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
       }).pipe(Effect.asVoid),
     getHistoryEvents: (
       context: CopilotSessionContext,
-    ): Effect.Effect<ReadonlyArray<SessionEvent>, ProviderAdapterRequestError> =>
+    ): Effect.Effect<SessionEvent[], ProviderAdapterRequestError> =>
       Effect.tryPromise({
         try: () => context.sdkSession.getEvents(),
         catch: (cause) =>
@@ -1588,13 +1614,19 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
       type: "turn.completed",
       payload: {
         state: status,
+        tokenUsage: copilotTurnTokenUsage(
+          context.turnUsageByTurnId.get(turnId),
+          context.turnsWithSubagents.has(turnId),
+        ),
         ...(input?.stopReason !== undefined ? { stopReason: input.stopReason } : {}),
         ...(context.turnUsageByTurnId.has(turnId)
-          ? { usage: context.turnUsageByTurnId.get(turnId) }
+          ? { usage: copilotUsageSnapshot(context.turnUsageByTurnId.get(turnId)!) }
           : {}),
         ...(input?.errorMessage ? { errorMessage: input.errorMessage } : {}),
       },
     });
+    context.turnUsageByTurnId.delete(turnId);
+    context.turnsWithSubagents.delete(turnId);
   };
 
   const hasTurnCompletionSignal = (context: CopilotSessionContext, turnId: TurnId): boolean =>
@@ -1992,6 +2024,69 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
       }
     });
 
+  const taskLinkage = (taskId: string, task: CopilotTaskState) => ({
+    taskId: RuntimeTaskId.make(taskId),
+    ...(task.taskType ? { taskType: task.taskType } : {}),
+    ...(task.taskType !== "shell" ? { toolUseId: taskId } : {}),
+    ...(task.title ? { title: task.title } : {}),
+    ...(task.role ? { role: task.role } : {}),
+    ...(task.model ? { model: task.model } : {}),
+  });
+
+  const ensureTask = Effect.fn("CopilotAdapter.ensureTask")(function* (
+    context: CopilotSessionContext,
+    taskId: string,
+    input: {
+      turnId: TurnId;
+      description: string;
+      taskType?: string | undefined;
+      title?: string | undefined;
+      role?: string | undefined;
+      model?: string | undefined;
+    },
+    raw: SessionEvent,
+  ) {
+    const previous = context.copilotTasks.get(taskId);
+    if (previous) {
+      previous.description = input.description || previous.description;
+      previous.taskType = input.taskType ?? previous.taskType;
+      previous.title = input.title ?? previous.title;
+      previous.role = input.role ?? previous.role;
+      previous.model = input.model ?? previous.model;
+      return previous;
+    }
+    const task: CopilotTaskState = { ...input, status: "running" };
+    context.copilotTasks.set(taskId, task);
+    if (task.taskType !== "shell") context.turnsWithSubagents.add(task.turnId);
+    yield* emit({
+      ...createBaseEvent({ threadId: context.threadId, turnId: task.turnId, raw }),
+      type: "task.started",
+      payload: { ...taskLinkage(taskId, task), description: task.description },
+    });
+    return task;
+  });
+
+  const bindAgentTask = Effect.fn("CopilotAdapter.bindAgentTask")(function* (
+    context: CopilotSessionContext,
+    agentId: string,
+    taskId: string,
+    task: CopilotTaskState,
+    raw: SessionEvent,
+  ) {
+    context.taskIdByAgentId.set(agentId, taskId);
+    const pending = context.pendingUsageByAgentId.get(agentId);
+    if (!pending) return;
+    context.pendingUsageByAgentId.delete(agentId);
+    task.usage = mergeCopilotUsageTotals(task.usage, pending);
+    const typedUsage = copilotTaskUsage(task.usage);
+    if (typedUsage)
+      yield* emit({
+        ...createBaseEvent({ threadId: context.threadId, turnId: task.turnId, raw }),
+        type: "task.progress",
+        payload: { ...taskLinkage(taskId, task), description: task.description, typedUsage },
+      });
+  });
+
   const emitBackgroundTasksPlanSnapshot = (
     context: CopilotSessionContext,
     raw: SessionEvent,
@@ -2007,40 +2102,43 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         if (!taskId) {
           continue;
         }
-        const description = copilotTaskDescription(task);
-        const taskType = copilotTaskType(task);
+        const description = copilotTaskDescription(task) || "Copilot task";
+        const linkage = copilotTaskLinkage(task);
         const previous = context.copilotTasks.get(taskId);
-        const runtimeTaskId = RuntimeTaskId.make(taskId);
-        if (!previous) {
-          yield* emit({
-            ...createBaseEvent({
-              threadId: context.threadId,
-              turnId,
-              raw,
-            }),
-            type: "task.started",
-            payload: {
-              taskId: runtimeTaskId,
-              description,
-              ...(taskType ? { taskType } : {}),
-            },
-          });
-        }
+        const previousDescription = previous?.description;
+        const state = yield* ensureTask(
+          context,
+          taskId,
+          {
+            turnId: context.turnIdByProviderItemId.get(taskId) ?? turnId,
+            description,
+            taskType: task.type,
+            ...(task.type === "agent"
+              ? { model: task.resolvedModel ?? task.model, role: task.agentType }
+              : {}),
+          },
+          raw,
+        );
+        if (task.type === "agent") yield* bindAgentTask(context, task.id, taskId, state, raw);
+        const typedUsage = state.finalUsage ?? copilotTaskUsage(state.usage);
         if (
           (task.status === "running" || task.status === "idle") &&
-          (!previous || previous.status !== task.status || previous.description !== description)
+          (!previous || previous.status !== task.status || previousDescription !== description)
         ) {
           yield* emit({
             ...createBaseEvent({
               threadId: context.threadId,
-              turnId,
+              turnId: state.turnId,
               raw,
             }),
             type: "task.progress",
             payload: {
-              taskId: runtimeTaskId,
+              ...taskLinkage(taskId, state),
               description,
               summary: copilotTaskProgressSummary(task.status),
+              status: task.status,
+              ...(typedUsage ? { typedUsage } : {}),
+              ...linkage,
             },
           });
         }
@@ -2050,21 +2148,20 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           yield* emit({
             ...createBaseEvent({
               threadId: context.threadId,
-              turnId,
+              turnId: state.turnId,
               raw,
             }),
             type: "task.completed",
             payload: {
-              taskId: runtimeTaskId,
+              ...taskLinkage(taskId, state),
               status: completedStatus,
               ...(summary ? { summary } : {}),
+              ...(typedUsage ? { typedUsage } : {}),
+              ...linkage,
             },
           });
         }
-        context.copilotTasks.set(taskId, {
-          description,
-          status: task.status,
-        });
+        state.status = task.status;
       }
     });
 
@@ -2293,6 +2390,9 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "session.error": {
+        if (event.data.errorType === "quota" || event.data.errorType === "rate_limit") {
+          scheduleLimitsRefresh(context.client, true);
+        }
         const message = trimOrUndefined(event.data.message) ?? "Copilot session failed.";
         const isAccountLimitError =
           event.data.errorType === "rate_limit" || event.data.errorType === "quota";
@@ -2353,6 +2453,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "session.idle": {
+        scheduleLimitsRefresh(context.client);
         if (context.activeTurnId) {
           const turnId = context.activeTurnId;
           if (event.data.aborted) {
@@ -2445,6 +2546,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "session.usage_info": {
+        if (event.agentId) return;
         await emitAsync({
           ...createBaseEvent({
             threadId: context.threadId,
@@ -2592,17 +2694,70 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "assistant.usage": {
+        scheduleLimitsRefresh(context.client);
+        const taskId =
+          event.data.parentToolCallId ??
+          (event.agentId ? context.taskIdByAgentId.get(event.agentId) : undefined);
         const turnId = resolveTurnIdForEvent(context, {
-          parentProviderItemId: event.data.parentToolCallId,
+          parentProviderItemId: taskId,
           sdkTurnId: context.activeSdkTurnId,
           sdkEventTimestamp: event.timestamp,
           agentId: event.agentId,
         });
-        if (!turnId) {
+        if (
+          !turnId ||
+          isSdkEventBeforeQueuedTurn(context, turnId, event.timestamp) ||
+          (!taskId && context.completedTurnIds.has(turnId))
+        ) {
           return;
         }
-        const usage = usageSnapshotFromAssistantUsage(event);
-        context.turnUsageByTurnId.set(turnId, usage);
+        const callKey = JSON.stringify([event.data.model, event.data.apiCallId ?? event.id]);
+        if (context.seenUsageCalls.has(callKey)) return;
+        context.seenUsageCalls.add(callKey);
+        if (event.agentId && !taskId) {
+          // Never invent a second task ID while waiting for subagent.started.
+          context.turnsWithSubagents.add(turnId);
+          context.pendingUsageByAgentId.set(
+            event.agentId,
+            addCopilotUsage(context.pendingUsageByAgentId.get(event.agentId), event.data),
+          );
+        } else if (taskId) {
+          const task = await runWithContext(
+            ensureTask(
+              context,
+              taskId,
+              {
+                turnId,
+                description: context.copilotTasks.get(taskId)?.description ?? "Copilot subagent",
+                taskType: "agent",
+                model: event.data.model,
+              },
+              event,
+            ),
+          );
+          task.usage = addCopilotUsage(task.usage, event.data);
+          const typedUsage = copilotTaskUsage(task.usage);
+          if (typedUsage)
+            await emitAsync({
+              ...createBaseEvent({ threadId: context.threadId, turnId: task.turnId, raw: event }),
+              type: "task.progress",
+              payload: {
+                ...taskLinkage(taskId, task),
+                description: task.description,
+                typedUsage,
+              },
+            });
+        } else if (
+          event.data.initiator !== "sub-agent" &&
+          event.data.initiator !== "mcp-sampling"
+        ) {
+          context.turnUsageByTurnId.set(
+            turnId,
+            addCopilotUsage(context.turnUsageByTurnId.get(turnId), event.data),
+          );
+        } else if (event.data.initiator === "sub-agent") {
+          context.turnsWithSubagents.add(turnId);
+        }
         return;
       }
       case "abort": {
@@ -2619,6 +2774,10 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           type: "turn.aborted",
           payload: {
             reason: event.data.reason,
+            tokenUsage: copilotTurnTokenUsage(
+              context.turnUsageByTurnId.get(turnId),
+              context.turnsWithSubagents.has(turnId),
+            ),
           },
         });
         await emitTurnCompleted(context, turnId, "cancelled", {
@@ -2798,10 +2957,88 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         return;
       }
       case "subagent.started": {
-        const turnId = context.turnIdByProviderItemId.get(event.data.toolCallId);
-        if (turnId) {
-          markTurnContinuingWithTool(context, turnId);
-        }
+        const turnId = resolveTurnIdForEvent(context, {
+          parentProviderItemId: event.data.toolCallId,
+          sdkEventTimestamp: event.timestamp,
+        });
+        if (
+          !turnId ||
+          context.completedTurnIds.has(turnId) ||
+          isSdkEventBeforeQueuedTurn(context, turnId, event.timestamp)
+        )
+          return;
+        markTurnContinuingWithTool(context, turnId);
+        context.turnIdByProviderItemId.set(event.data.toolCallId, turnId);
+        const task = await runWithContext(
+          ensureTask(
+            context,
+            event.data.toolCallId,
+            {
+              turnId,
+              description:
+                event.data.agentDescription || event.data.agentDisplayName || "Copilot subagent",
+              taskType: "agent",
+              title: event.data.agentDisplayName,
+              role: event.data.agentName,
+              model: event.data.model,
+            },
+            event,
+          ),
+        );
+        if (event.agentId)
+          await runWithContext(
+            bindAgentTask(context, event.agentId, event.data.toolCallId, task, event),
+          );
+        return;
+      }
+      case "subagent.completed":
+      case "subagent.failed": {
+        const taskId = event.data.toolCallId;
+        const turnId =
+          context.copilotTasks.get(taskId)?.turnId ??
+          resolveTurnIdForEvent(context, {
+            parentProviderItemId: taskId,
+            sdkEventTimestamp: event.timestamp,
+          });
+        if (!turnId || isSdkEventBeforeQueuedTurn(context, turnId, event.timestamp)) return;
+        const task = await runWithContext(
+          ensureTask(
+            context,
+            taskId,
+            {
+              turnId,
+              description: event.data.agentDisplayName || "Copilot subagent",
+              taskType: "agent",
+              title: event.data.agentDisplayName,
+              role: event.data.agentName,
+              model: event.data.model,
+            },
+            event,
+          ),
+        );
+        if (event.agentId)
+          await runWithContext(bindAgentTask(context, event.agentId, taskId, task, event));
+        const status = event.type === "subagent.failed" ? "failed" : "completed";
+        const finalUsage = copilotTaskUsage(task.usage, event.data);
+        if (
+          task.status === status &&
+          JSON.stringify(task.finalUsage) === JSON.stringify(finalUsage)
+        )
+          return;
+        task.status = status;
+        task.finalUsage = finalUsage;
+        await emitAsync({
+          ...createBaseEvent({ threadId: context.threadId, turnId, raw: event }),
+          type: "task.completed",
+          payload: {
+            ...taskLinkage(taskId, task),
+            status: task.status,
+            ...(event.type === "subagent.failed" && event.data.error
+              ? { summary: event.data.error }
+              : {}),
+            ...(task.finalUsage ? { typedUsage: task.finalUsage } : {}),
+          },
+        });
         return;
       }
       case "mcp.oauth_required": {
@@ -3198,6 +3435,10 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         emittedTurnStartedIds: new Set(),
         turnStartPayloadByTurnId: new Map(),
         turnUsageByTurnId: new Map(),
+        turnsWithSubagents: new Set(),
+        seenUsageCalls: new Set(),
+        taskIdByAgentId: new Map(),
+        pendingUsageByAgentId: new Map(),
         pendingPermissionHandlersBySignature: new Map(),
         pendingPermissionEventsBySignature: new Map(),
         pendingPermissionBindings: new Map(),
@@ -3228,6 +3469,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         stopped: false,
       };
       sessions.set(input.threadId, context);
+      scheduleLimitsRefresh(client);
       for (const pending of bootstrapPermissionRequests) {
         yield* onPermissionRequest(context, pending.request, pending.result);
       }

@@ -23,6 +23,7 @@ import { makeCopilotTextGeneration } from "../../textGeneration/CopilotTextGener
 import { ServerConfig } from "../../config.ts";
 import { ServerSettingsService } from "../../serverSettings.ts";
 import { ProviderDriverError } from "../Errors.ts";
+import { CopilotUsageLimitsSink, makeCopilotUsageLimitsState } from "../copilotUsageLimits.ts";
 import { makeCopilotAdapter } from "../Layers/CopilotAdapter.ts";
 import {
   checkCopilotProviderStatus,
@@ -94,12 +95,13 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
         ),
       );
 
+      const usageLimits = yield* makeCopilotUsageLimitsState();
       const adapter = yield* makeCopilotAdapter(effectiveConfig, {
         instanceId,
         baseDirectory,
         environment: processEnv,
         ...(eventLoggers.native ? { nativeEventLogger: eventLoggers.native } : {}),
-      });
+      }).pipe(Effect.provideService(CopilotUsageLimitsSink, usageLimits));
       const textGeneration = yield* makeCopilotTextGeneration(effectiveConfig, processEnv, {
         baseDirectory,
       });
@@ -116,7 +118,7 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
           cwd: serverConfig.cwd,
           baseDirectory,
           environment: processEnv,
-        }).pipe(Effect.map(stampIdentity)),
+        }).pipe(Effect.map(stampIdentity), Effect.tap(usageLimits.recordProbe)),
       }).pipe(
         Effect.mapError(
           (cause) =>
@@ -136,7 +138,7 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = 
         displayName,
         accentColor,
         enabled,
-        snapshot,
+        snapshot: usageLimits.wrap(snapshot),
         adapter,
         textGeneration,
       } satisfies ProviderInstance;

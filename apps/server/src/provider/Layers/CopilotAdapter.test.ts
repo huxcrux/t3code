@@ -24,6 +24,7 @@ import { vi } from "vite-plus/test";
 
 import {
   ApprovalRequestId,
+  classifyTaskAgentKind,
   CopilotSettings,
   EnvironmentId,
   type ProviderRuntimeEvent,
@@ -1228,8 +1229,8 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
       NodeAssert.equal(completed?.type, "turn.completed");
       if (completed?.type === "turn.completed") {
         NodeAssert.deepStrictEqual(completed.payload.usage, {
-          usedTokens: 125,
-          lastUsedTokens: 125,
+          usedTokens: 105,
+          lastUsedTokens: 105,
           inputTokens: 100,
           lastInputTokens: 100,
           cachedInputTokens: 20,
@@ -2371,11 +2372,18 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
       });
 
       const runtimeEvents: ProviderRuntimeEvent[] = [];
+      const tasksEmitted = yield* Deferred.make<void>();
       const runtimeEventsFiber = yield* adapter.streamEvents.pipe(
-        Stream.runForEach((event) => Effect.sync(() => runtimeEvents.push(event))),
-        Effect.forkChild,
+        Stream.runForEach((event) =>
+          Effect.gen(function* () {
+            runtimeEvents.push(event);
+            if (event.type === "task.completed" && event.payload.taskId === "tool-task-review-1") {
+              yield* Deferred.succeed(tasksEmitted, undefined);
+            }
+          }),
+        ),
+        Effect.forkChild({ startImmediately: true }),
       );
-      yield* waitForSdkEventQueue();
 
       runtimeMock.state.lastSession.rpc.tasks.list.mockResolvedValueOnce({
         tasks: [
@@ -2423,13 +2431,7 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
         data: {},
       } as SessionEvent);
 
-      for (
-        let attempt = 0;
-        attempt < 20 && runtimeEvents.filter((event) => event.type === "task.started").length < 3;
-        attempt += 1
-      ) {
-        yield* waitForSdkEventQueue();
-      }
+      yield* Deferred.await(tasksEmitted);
       yield* Fiber.interrupt(runtimeEventsFiber).pipe(Effect.ignore);
 
       NodeAssert.equal(
@@ -2438,13 +2440,13 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
       );
       const startedTasks = runtimeEvents.filter((event) => event.type === "task.started");
       NodeAssert.deepStrictEqual(startedTasks.map((event) => String(event.payload.taskId)).sort(), [
-        "task-explore-1",
-        "task-review-1",
         "task-shell-1",
+        "tool-task-explore-1",
+        "tool-task-review-1",
       ]);
       const runningProgress = runtimeEvents.find(
         (event) =>
-          event.type === "task.progress" && String(event.payload.taskId) === "task-explore-1",
+          event.type === "task.progress" && String(event.payload.taskId) === "tool-task-explore-1",
       );
       NodeAssert.equal(runningProgress?.type, "task.progress");
       if (runningProgress?.type === "task.progress") {
@@ -2455,11 +2457,100 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
       NodeAssert.deepStrictEqual(
         completedTasks.map((event) => [String(event.payload.taskId), event.payload.status]).sort(),
         [
-          ["task-review-1", "failed"],
           ["task-shell-1", "completed"],
+          ["tool-task-review-1", "failed"],
         ],
       );
 
+      for (const event of runtimeEvents) {
+        if (
+          event.type !== "task.started" &&
+          event.type !== "task.progress" &&
+          event.type !== "task.completed"
+        ) {
+          continue;
+        }
+        const isShell = event.payload.taskId === "task-shell-1";
+        NodeAssert.equal(event.payload.taskType, isShell ? "shell" : "agent", event.type);
+        NodeAssert.equal(classifyTaskAgentKind(event.payload), isShell ? "background" : "agent");
+        if (!isShell) {
+          const isExplore = event.payload.taskId === "tool-task-explore-1";
+          NodeAssert.equal(event.payload.role, isExplore ? "explore" : "code-review");
+          NodeAssert.equal(
+            event.payload.toolUseId,
+            isExplore ? "tool-task-explore-1" : "tool-task-review-1",
+          );
+        }
+      }
+
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("keeps shell task updates out of the agent roster without hiding custom agents", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CopilotAdapter;
+      const threadId = asThreadId("copilot-task-classification");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      yield* adapter.sendTurn({ threadId, input: "run background work" });
+      const config = runtimeMock.state.createSessionConfigs.at(-1);
+      NodeAssert.ok(config?.onEvent);
+      const timestamp = yield* nowIso;
+
+      const tasks = [
+        { type: "shell", id: "shell-task", command: "vp test", attachmentMode: "detached" },
+        ...["shell", "plan", "dream"].map((agentType) => ({
+          type: "agent",
+          id: `agent-${agentType}`,
+          toolCallId: `tool-${agentType}`,
+          agentType,
+          prompt: "Delegate work",
+        })),
+      ];
+      for (const task of tasks) {
+        for (const status of ["running", "idle", "completed"] as const) {
+          const eventsFiber = yield* adapter.streamEvents.pipe(
+            Stream.filter(
+              (event) =>
+                event.type === "task.started" ||
+                event.type === "task.progress" ||
+                event.type === "task.completed",
+            ),
+            Stream.take(status === "running" ? 2 : 1),
+            Stream.runCollect,
+            Effect.forkChild({ startImmediately: true }),
+          );
+          runtimeMock.state.lastSession.rpc.tasks.list.mockResolvedValueOnce({
+            tasks: [{ ...task, status, description: "Background work", startedAt: timestamp }],
+          });
+          config.onEvent({
+            id: `evt-${task.id}-${status}`,
+            timestamp,
+            parentId: null,
+            ephemeral: true,
+            type: "session.background_tasks_changed",
+            data: {},
+          } as SessionEvent);
+          const events = yield* Fiber.join(eventsFiber);
+          NodeAssert.deepStrictEqual(
+            events.map((event) => event.type),
+            status === "running"
+              ? ["task.started", "task.progress"]
+              : [status === "idle" ? "task.progress" : "task.completed"],
+          );
+          for (const event of events) {
+            NodeAssert.equal(
+              event.payload.taskId,
+              "toolCallId" in task ? task.toolCallId : task.id,
+            );
+            NodeAssert.equal(event.payload.taskType, task.type);
+            NodeAssert.equal(
+              classifyTaskAgentKind(event.payload),
+              task.type === "shell" ? "background" : "agent",
+            );
+          }
+        }
+      }
       yield* adapter.stopSession(threadId);
     }),
   );

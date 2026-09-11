@@ -5,6 +5,8 @@ import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 
 import { buildServerProvider, type ServerProviderDraft } from "../providerSnapshot.ts";
+import { readCopilotUsageLimits } from "../copilotUsageLimits.ts";
+import { makeUnavailableUsageLimits } from "../providerUsageLimits.ts";
 import {
   authSnapshotFromCopilotSdk,
   createCopilotClient,
@@ -93,6 +95,7 @@ export function checkCopilotProviderStatus(input: {
         status: "error",
         auth: { status: "unknown" },
         message: failure.message,
+        usageLimits: makeUnavailableUsageLimits({ checkedAt, reason: "probeFailed" }),
       },
     });
   };
@@ -110,47 +113,55 @@ export function checkCopilotProviderStatus(input: {
         logLevel: "error",
       }).pipe(Effect.mapError(toCopilotProbeError)),
       (client) =>
-        Effect.tryPromise({
-          try: async () => {
-            const checkedAt = DateTime.formatIso(DateTime.nowUnsafe());
-            await client.start();
-            const [status, authStatus, models] = await Promise.all([
-              client.getStatus(),
-              client.getAuthStatus(),
-              client.listModels(),
-            ]);
-            const authSnapshot = authSnapshotFromCopilotSdk(authStatus);
-            const providerModels = modelsFromCopilotSdk({
-              models,
-              customModels: input.settings.customModels,
-            });
-            const hasBuiltInModels = models.length > 0;
+        Effect.gen(function* () {
+          const checkedAt = DateTime.formatIso(yield* DateTime.now);
+          const [status, authStatus] = yield* Effect.tryPromise({
+            try: async () => {
+              await client.start();
+              return Promise.all([client.getStatus(), client.getAuthStatus()]);
+            },
+            catch: toCopilotProbeError,
+          });
+          const [models, usageLimits] = authStatus.isAuthenticated
+            ? yield* Effect.all(
+                [
+                  Effect.tryPromise({ try: () => client.listModels(), catch: toCopilotProbeError }),
+                  readCopilotUsageLimits(client),
+                ],
+                { concurrency: 2 },
+              )
+            : ([[], makeUnavailableUsageLimits({ checkedAt, reason: "unsupported" })] as const);
+          const authSnapshot = authSnapshotFromCopilotSdk(authStatus);
+          const providerModels = modelsFromCopilotSdk({
+            models,
+            customModels: input.settings.customModels,
+          });
+          const hasBuiltInModels = models.length > 0;
 
-            return buildServerProvider({
-              driver: PROVIDER,
-              presentation: COPILOT_PRESENTATION,
-              enabled: true,
-              checkedAt,
-              models: providerModels,
-              probe: {
-                installed: true,
-                version: versionFromCopilotStatus(status),
-                status:
-                  authSnapshot.status !== "ready"
-                    ? authSnapshot.status
-                    : hasBuiltInModels
-                      ? "ready"
-                      : "warning",
-                auth: authSnapshot.auth,
-                ...(authSnapshot.message
-                  ? { message: authSnapshot.message }
+          return buildServerProvider({
+            driver: PROVIDER,
+            presentation: COPILOT_PRESENTATION,
+            enabled: true,
+            checkedAt,
+            models: providerModels,
+            probe: {
+              installed: true,
+              version: versionFromCopilotStatus(status),
+              status:
+                authSnapshot.status !== "ready"
+                  ? authSnapshot.status
                   : hasBuiltInModels
-                    ? {}
-                    : { message: "Copilot did not report any available models for this account." }),
-              },
-            });
-          },
-          catch: toCopilotProbeError,
+                    ? "ready"
+                    : "warning",
+              auth: authSnapshot.auth,
+              usageLimits,
+              ...(authSnapshot.message
+                ? { message: authSnapshot.message }
+                : hasBuiltInModels
+                  ? {}
+                  : { message: "Copilot did not report any available models for this account." }),
+            },
+          });
         }).pipe(
           Effect.timeout(Duration.seconds(30)),
           Effect.catch((cause) => Effect.succeed(fallback(cause))),

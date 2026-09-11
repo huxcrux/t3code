@@ -100,6 +100,7 @@ const serviceLayers = (input: {
     Layer.provideMerge(
       Layer.succeed(HostProcessEnvironment, {
         GROK_HOME: NodePath.join(input.home, "grok"),
+        COPILOT_HOME: NodePath.join(input.home, "copilot"),
         ...input.environment,
       }),
     ),
@@ -330,6 +331,150 @@ describe("UsageService", () => {
           NodePath.join(home, "grok", "sessions"),
         );
       }).pipe(Effect.scoped),
+  );
+
+  it.live(
+    "scans one Copilot instance tree including retired homes, excludes global history, and resumes its cache",
+    () =>
+      Effect.gen(function* () {
+        const { home, settings } = yield* setup;
+        yield* Effect.gen(function* () {
+          const config = yield* ServerConfig.ServerConfig;
+          const settingsService = yield* ServerSettings.ServerSettingsService;
+          const instancesDir = NodePath.join(config.stateDir, "providers", "copilot");
+          const globalDir = NodePath.join(home, "copilot", "session-state");
+          const firstDir = NodePath.join(instancesDir, "first-instance", "session-state");
+          const secondDir = NodePath.join(instancesDir, "retired-instance", "session-state");
+          const line = (sessionId: string, outputTokens: number) =>
+            `${JSON.stringify({
+              type: "session.shutdown",
+              id: `${sessionId}-${outputTokens}`,
+              timestamp: "2026-08-01T10:00:00Z",
+              data: {
+                modelMetrics: {
+                  "gpt-5": {
+                    requests: { cost: 999 },
+                    totalNanoAiu: 123_000_000_000,
+                    usage: {
+                      inputTokens: 100,
+                      outputTokens,
+                      cacheReadTokens: 20,
+                      cacheWriteTokens: 0,
+                    },
+                  },
+                },
+              },
+            })}\n`;
+          const write = (root: string, sessionId: string, outputTokens: number) =>
+            Effect.promise(async () => {
+              const dir = NodePath.join(root, sessionId);
+              await NodeFSP.mkdir(dir, { recursive: true });
+              const path = NodePath.join(dir, "events.jsonl");
+              await NodeFSP.writeFile(path, line(sessionId, outputTokens));
+              // The instance-tree walk only reads the native transcript basename.
+              await NodeFSP.writeFile(NodePath.join(dir, "other.jsonl"), line(sessionId, 9999));
+              return path;
+            });
+          yield* write(globalDir, "global-only-session", 9999);
+          yield* write(firstDir, "copied-session", 5);
+          const growing = yield* write(firstDir, "local-session", 10);
+          yield* write(secondDir, "copied-session", 5);
+          yield* write(secondDir, "retired-session", 15);
+
+          const service = yield* UsageService.make;
+          const first = yield* service.readSummary(WINDOW);
+          const bucket = first.buckets.find((value) => value.provider === "copilot");
+          assert.strictEqual(bucket?.totals.outputTokens, 30);
+          assert.strictEqual(bucket?.sessions, 3);
+          assert.strictEqual(bucket?.records, 3);
+          assert.strictEqual(bucket?.costSource, "modelPriced");
+          assert.closeTo(bucket?.costUsd ?? -1, 0.00078, 1e-12);
+          const sources = first.sources.filter(
+            (source) => source.fingerprint.provider === "copilot",
+          );
+          assert.deepStrictEqual(
+            sources.map((source) => source.fingerprint.resolvedHomePath),
+            [instancesDir],
+          );
+          const rootStats = yield* Effect.promise(() => NodeFSP.stat(instancesDir));
+          assert.strictEqual(sources[0]?.fingerprint.volumeId, `${rootStats.dev}:${rootStats.ino}`);
+          assert.strictEqual(sources[0]?.scannedFiles, 4);
+          assert.strictEqual(sources[0]?.distinctSessions, 3);
+          assert.isTrue(sources[0]?.message?.includes("shutdown"));
+          assert.deepStrictEqual((yield* service.readSummary(WINDOW)).buckets, first.buckets);
+
+          // A new service instance loads the persisted baseline before reading appended bytes.
+          const restarted = yield* UsageService.make;
+          yield* Effect.promise(() => NodeFSP.appendFile(growing, line("local-session", 25)));
+          const next = yield* restarted.readSummary(WINDOW);
+          assert.strictEqual(
+            next.buckets.find((value) => value.provider === "copilot")?.totals.outputTokens,
+            45,
+          );
+          yield* Effect.promise(() => NodeFSP.appendFile(growing, line("local-session", 25)));
+          assert.deepStrictEqual((yield* restarted.readSummary(WINDOW)).buckets, next.buckets);
+
+          yield* settingsService.updateSettings({
+            usagePriceOverrides: {
+              "gpt-5": { inputCostPerMillionTokens: 4, outputCostPerMillionTokens: 16 },
+            },
+          });
+          const repriced = yield* restarted.readSummary(WINDOW);
+          assert.strictEqual(repriced.buckets[0]?.totals.outputTokens, 45);
+          assert.closeTo(repriced.buckets[0]?.costUsd ?? -1, 0.00192, 1e-12);
+        }).pipe(
+          Effect.provide(
+            serviceLayers({
+              prefix: "usage-service-copilot-test",
+              home,
+              settings,
+              ratesDocument: {
+                "gpt-5": { input_cost_per_token: 2e-6, output_cost_per_token: 6e-6 },
+              },
+            }),
+          ),
+        );
+      }).pipe(Effect.scoped),
+  );
+
+  it.live("reports the missing Copilot instance root without falling back to the global home", () =>
+    Effect.gen(function* () {
+      const { home, settings } = yield* setup;
+      yield* Effect.gen(function* () {
+        const config = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const instancesDir = NodePath.join(config.stateDir, "providers", "copilot");
+        const defaultDir = NodePath.join(NodeOS.homedir(), ".copilot", "session-state");
+        const probedPaths: string[] = [];
+        const service = yield* UsageService.make.pipe(
+          Effect.provideService(HostProcessEnvironment, {
+            GROK_HOME: NodePath.join(home, "grok"),
+            COPILOT_HOME: "  ",
+          }),
+          Effect.provideService(FileSystem.FileSystem, {
+            ...fileSystem,
+            exists: (path) => {
+              probedPaths.push(path);
+              // A regression must not read the developer's real transcripts.
+              return path === defaultDir ? Effect.succeed(false) : fileSystem.exists(path);
+            },
+          }),
+        );
+        const summary = yield* service.readSummary(WINDOW);
+        const sources = summary.sources.filter((value) => value.fingerprint.provider === "copilot");
+        assert.deepStrictEqual(
+          sources.map((source) => source.fingerprint.resolvedHomePath),
+          [instancesDir],
+        );
+        assert.strictEqual(sources[0]?.status, "missing");
+        assert.strictEqual(sources[0]?.fingerprint.volumeId, "");
+        assert.notInclude(probedPaths, defaultDir);
+      }).pipe(
+        Effect.provide(
+          serviceLayers({ prefix: "usage-service-copilot-default-test", home, settings }),
+        ),
+      );
+    }).pipe(Effect.scoped),
   );
 
   it.live("reprices unchanged transcripts when custom prices are added, edited, or removed", () =>
