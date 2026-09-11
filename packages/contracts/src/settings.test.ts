@@ -6,6 +6,7 @@ import {
   ClientSettingsSchema,
   ClientSettingsPatch,
   ClaudeSettings,
+  CopilotSettings,
   DEFAULT_SERVER_SETTINGS,
   resolveProviderInstanceEnabled,
   ServerSettings,
@@ -19,6 +20,7 @@ const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
 const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodeCopilotSettings = Schema.decodeUnknownSync(CopilotSettings);
 
 describe("ServerSettings default permissions", () => {
   it("keeps full access for settings saved before a default was configured", () => {
@@ -113,8 +115,11 @@ describe("custom model settings", () => {
     ],
   };
 
-  it("accepts legacy bare slugs alongside full entries", () => {
-    const decoded = decodeClaudeSettings({
+  it.each([
+    ["Claude", decodeClaudeSettings],
+    ["Copilot", decodeCopilotSettings],
+  ] as const)("%s accepts legacy bare slugs alongside full entries", (_, decodeSettings) => {
+    const decoded = decodeSettings({
       customModels: ["bare-slug", { slug: "named", name: "Named", capabilities }],
     });
     expect(decoded.customModels).toEqual([
@@ -123,16 +128,21 @@ describe("custom model settings", () => {
     ]);
   });
 
-  it("accepts entries at the settings patch boundary", () => {
-    expect(
-      decodeServerSettingsPatch({
-        providers: { codex: { customModels: [{ slug: "x", capabilities }] } },
-      }).providers?.codex?.customModels,
-    ).toEqual([{ slug: "x", capabilities }]);
-    expect(() =>
-      decodeServerSettingsPatch({ providers: { codex: { customModels: [{ name: "no slug" }] } } }),
-    ).toThrow();
-  });
+  it.each(["codex", "copilot"] as const)(
+    "%s accepts entries at the settings patch boundary",
+    (driver) => {
+      expect(
+        decodeServerSettingsPatch({
+          providers: { [driver]: { customModels: [{ slug: "x", capabilities }] } },
+        }).providers?.[driver]?.customModels,
+      ).toEqual([{ slug: "x", capabilities }]);
+      expect(() =>
+        decodeServerSettingsPatch({
+          providers: { [driver]: { customModels: [{ name: "no slug" }] } },
+        }),
+      ).toThrow();
+    },
+  );
 });
 
 describe("ClaudeSettings auto-compaction", () => {
@@ -610,6 +620,12 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
     // Legacy `providers` struct is still hydrated with its per-driver defaults
     // so existing call sites keep working through the migration.
     expect(decoded.providers.codex.enabled).toBe(true);
+    expect(decoded.providers.copilot).toEqual({
+      enabled: true,
+      binaryPath: "",
+      serverUrl: "",
+      customModels: [],
+    });
   });
 
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {
@@ -656,9 +672,10 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 });
 
 describe("provider enabled defaults", () => {
-  it("enables only the stable bindings by default", () => {
+  it("preserves built-in provider defaults", () => {
     const decoded = decodeServerSettings({});
     expect(decoded.providers.codex.enabled).toBe(true);
+    expect(decoded.providers.copilot.enabled).toBe(true);
     expect(decoded.providers.claudeAgent.enabled).toBe(true);
     expect(decoded.providers.cursor.enabled).toBe(false);
     expect(decoded.providers.grok.enabled).toBe(false);
@@ -789,6 +806,10 @@ describe("ServerSettingsPatch string normalization", () => {
           homePath: "  ~/.codex  ",
           launchArgs: "  --strict-config --enable foo  ",
         },
+        copilot: {
+          binaryPath: "  /opt/homebrew/bin/copilot  ",
+          serverUrl: "  http://127.0.0.1:4141  ",
+        },
       },
       providerInstances: {
         codex_personal: {
@@ -805,6 +826,8 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(patch.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
     expect(patch.providers?.codex?.homePath).toBe("~/.codex");
     expect(patch.providers?.codex?.launchArgs).toBe("--strict-config --enable foo");
+    expect(patch.providers?.copilot?.binaryPath).toBe("/opt/homebrew/bin/copilot");
+    expect(patch.providers?.copilot?.serverUrl).toBe("http://127.0.0.1:4141");
     expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.driver).toBe(
       "codex",
     );

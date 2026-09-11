@@ -2614,6 +2614,7 @@ it.layer(Layer.mergeAll(NodeServices.layer, ServerSettingsModule.layerTest(), Te
                 "antigravity",
                 "claudeAgent",
                 "codex",
+                "copilot",
                 "cursor",
                 "grok",
                 "opencode",

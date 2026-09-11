@@ -134,9 +134,11 @@ export function getComposerProviderState(input: ComposerProviderStateInput): Com
     planModeEnabled,
   );
   const descriptors = getProviderOptionDescriptors({ caps, selections });
+  // Copilot models can expose a context tier without any reasoning control.
   const primarySelectDescriptor = descriptors.find(
     (descriptor): descriptor is Extract<(typeof descriptors)[number], { type: "select" }> =>
-      descriptor.type === "select",
+      descriptor.type === "select" &&
+      (provider !== "copilot" || descriptor.id === "reasoningEffort"),
   );
   const primaryValue = getProviderOptionCurrentValue(primarySelectDescriptor ?? null);
   const promptEffort = typeof primaryValue === "string" ? primaryValue : null;

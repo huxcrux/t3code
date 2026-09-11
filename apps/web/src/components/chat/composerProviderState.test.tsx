@@ -7,6 +7,7 @@ import {
 } from "@t3tools/contracts";
 import { getProviderOptionDescriptors } from "@t3tools/shared/model";
 import { getProviderModelCapabilities } from "../../providerModels";
+import { shouldRenderTraitsControls } from "./TraitsPicker";
 import {
   getComposerPromptInjectionState,
   getComposerProviderState,
@@ -230,6 +231,36 @@ describe("getComposerProviderState", () => {
 
     expect(state.modelOptionsForDispatch).toBeUndefined();
   });
+
+  it.each([undefined, "high"])(
+    "dispatches Copilot context tier separately from reasoning effort (%s)",
+    (reasoningEffort) => {
+      const input = {
+        provider: ProviderDriverKind.make("copilot"),
+        model: MODEL,
+        models: modelWith([
+          selectDescriptor("contextTier", [
+            { id: "default", label: "Default", isDefault: true },
+            { id: "long_context", label: "Long Context" },
+          ]),
+          ...(reasoningEffort
+            ? [selectDescriptor("reasoningEffort", [{ id: reasoningEffort, label: "High" }])]
+            : []),
+        ]),
+        modelOptions: reasoningEffort
+          ? selections(["contextTier", "long_context"], ["reasoningEffort", reasoningEffort])
+          : selections(["contextTier", "long_context"]),
+        planModeEnabled: false,
+      };
+
+      expect(getComposerProviderState(input)).toEqual({
+        provider: ProviderDriverKind.make("copilot"),
+        promptEffort: reasoningEffort ?? null,
+        modelOptionsForDispatch: input.modelOptions,
+      });
+      expect(shouldRenderTraitsControls({ ...input, prompt: "" })).toBe(true);
+    },
+  );
 
   it("returns undefined dispatch options when the model declares no descriptors", () => {
     const state = getComposerProviderState({
