@@ -67,6 +67,13 @@ const runtimeMock = vi.hoisted(() => {
       },
       plan: {
         read: vi.fn(async () => ({ exists: false, content: null, path: null })),
+        readSqlTodos: vi.fn(
+          async (): Promise<
+            Awaited<ReturnType<CopilotSession["rpc"]["plan"]["readSqlTodos"]>>
+          > => ({
+            rows: [],
+          }),
+        ),
       },
       tasks: {
         list: vi.fn(async (): Promise<{ tasks: Array<Record<string, unknown>> }> => ({
@@ -2608,6 +2615,211 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
       NodeAssert.deepStrictEqual(result, { kind: "approve-once" });
 
       yield* Fiber.interrupt(runtimeEventsFiber).pipe(Effect.ignore);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("maps SQL todos to plan steps, advances progress, and clears deleted todos", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CopilotAdapter;
+      const threadId = asThreadId("copilot-sql-todo-progress");
+      yield* adapter.startSession({ threadId, runtimeMode: "approval-required" });
+      const turn = yield* adapter.sendTurn({
+        threadId,
+        input: "Implement the plan",
+        attachments: [],
+      });
+      const config = runtimeMock.state.createSessionConfigs.at(-1);
+      NodeAssert.ok(config?.onEvent);
+      const { events, flush } = yield* collectTodoRuntimeEvents(adapter, config);
+      const rows = [
+        { id: "inspect", title: " Inspect files ", status: "in_progress" },
+        { id: "implement", title: "Implement changes", status: "pending" },
+        { id: "verify", title: " ", description: " Run tests ", status: "blocked" },
+        { id: "missing-label", status: "done" },
+      ];
+      const progressed = rows.map((row, index) => ({
+        ...row,
+        status: index === 0 ? "done" : index === 1 ? "in_progress" : row.status,
+      }));
+      const completed = rows.map((row) => ({ ...row, status: "done" }));
+      const snapshots = [rows, rows, progressed, completed, [], []];
+      const timestamp = yield* nowIso;
+      for (const [index, snapshot] of snapshots.entries()) {
+        runtimeMock.state.lastSession.rpc.plan.readSqlTodos.mockResolvedValueOnce({
+          rows: snapshot,
+        });
+        config.onEvent({
+          id: `todos-changed-${index}`,
+          timestamp,
+          parentId: null,
+          ephemeral: true,
+          type: "session.todos_changed",
+          data: {},
+        });
+      }
+      yield* flush();
+
+      const plans = events.filter((event) => event.type === "turn.plan.updated");
+      NodeAssert.deepStrictEqual(
+        plans.map((event) => event.payload.plan),
+        [
+          [
+            { step: "Inspect files", status: "inProgress" },
+            { step: "Implement changes", status: "pending" },
+            { step: "Run tests", status: "pending" },
+          ],
+          [
+            { step: "Inspect files", status: "completed" },
+            { step: "Implement changes", status: "inProgress" },
+            { step: "Run tests", status: "pending" },
+          ],
+          [
+            { step: "Inspect files", status: "completed" },
+            { step: "Implement changes", status: "completed" },
+            { step: "Run tests", status: "completed" },
+          ],
+          [],
+        ],
+      );
+      NodeAssert.ok(plans.every((event) => event.turnId === turn.turnId));
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "task.started" || event.type === "turn.proposed.completed",
+        ),
+        false,
+      );
+      NodeAssert.equal(runtimeMock.state.lastSession.rpc.tasks.list.mock.calls.length, 0);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("restores persisted todos once per T3 turn, not per SDK loop", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CopilotAdapter;
+      const threadId = asThreadId("copilot-resumed-todos");
+      yield* adapter.startSession({
+        threadId,
+        runtimeMode: "approval-required",
+        resumeCursor: { schemaVersion: 1, sessionId: "persisted-copilot-session" },
+      });
+      const config = runtimeMock.state.resumeSessionCalls.at(-1)?.config;
+      NodeAssert.ok(config?.onEvent);
+      const { events, flush } = yield* collectTodoRuntimeEvents(adapter, config);
+      runtimeMock.state.lastSession.rpc.plan.readSqlTodos.mockResolvedValue({
+        rows: [
+          { title: "Inspect", status: "done" },
+          { title: "Implement", status: "in_progress" },
+          { description: "Verify", status: "unexpected" },
+          { title: "Document" },
+        ],
+      });
+      const turns: TurnId[] = [];
+      for (let index = 0; index < 2; index += 1) {
+        const turn = yield* adapter.sendTurn({ threadId, input: "Continue", attachments: [] });
+        turns.push(turn.turnId);
+        const timestamp = yield* nowIso;
+        for (let loop = 0; loop < 2; loop += 1) {
+          config.onEvent({
+            id: `todo-turn-start-${index}-${loop}`,
+            timestamp,
+            parentId: null,
+            type: "assistant.turn_start",
+            data: { turnId: `sdk-turn-${index}-${loop}` },
+          });
+        }
+        config.onEvent({
+          id: `todo-turn-abort-${index}`,
+          timestamp,
+          parentId: null,
+          type: "abort",
+          data: { reason: "user_initiated" },
+        });
+        yield* flush();
+      }
+      const plans = events.filter((event) => event.type === "turn.plan.updated");
+      NodeAssert.deepStrictEqual(
+        plans.map((event) => event.turnId),
+        turns,
+      );
+      NodeAssert.deepStrictEqual(plans[0]?.payload.plan, [
+        { step: "Inspect", status: "completed" },
+        { step: "Implement", status: "inProgress" },
+        { step: "Verify", status: "pending" },
+        { step: "Document", status: "pending" },
+      ]);
+      NodeAssert.equal(runtimeMock.state.lastSession.rpc.plan.readSqlTodos.mock.calls.length, 2);
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("ignores stale and subagent todo signals and tolerates unavailable todo RPCs", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CopilotAdapter;
+      const threadId = asThreadId("copilot-todo-signal-guards");
+      yield* adapter.startSession({ threadId, runtimeMode: "approval-required" });
+      const config = runtimeMock.state.createSessionConfigs.at(-1);
+      NodeAssert.ok(config?.onEvent);
+      const { events, flush } = yield* collectTodoRuntimeEvents(adapter, config);
+      const timestamp = yield* nowIso;
+      const signal = {
+        id: "todo-signal",
+        timestamp,
+        parentId: null,
+        ephemeral: true,
+        type: "session.todos_changed",
+        data: {},
+      } satisfies SessionEvent;
+      config.onEvent(signal);
+      yield* flush();
+      yield* adapter.sendTurn({ threadId, input: "Continue", attachments: [] });
+      config.onEvent({ ...signal, agentId: "child-agent" });
+      config.onEvent({
+        ...signal,
+        timestamp: DateTime.formatIso(DateTime.subtract(yield* DateTime.now, { seconds: 2 })),
+      });
+      yield* flush();
+      NodeAssert.equal(runtimeMock.state.lastSession.rpc.plan.readSqlTodos.mock.calls.length, 0);
+
+      runtimeMock.state.lastSession.rpc.plan.readSqlTodos.mockRejectedValueOnce(
+        new Error("Method not found"),
+      );
+      config.onEvent(signal);
+      yield* flush();
+      NodeAssert.equal(
+        events.some(
+          (event) => event.type === "runtime.error" || event.type === "turn.plan.updated",
+        ),
+        false,
+      );
+
+      // A later notification retries the read, and an initially empty plan is not published.
+      config.onEvent(signal);
+      yield* flush();
+      NodeAssert.equal(
+        events.some((event) => event.type === "turn.plan.updated"),
+        false,
+      );
+      runtimeMock.state.lastSession.rpc.plan.readSqlTodos.mockResolvedValueOnce({
+        rows: [{ title: "Recovered task", status: "in_progress" }],
+      });
+      config.onEvent(signal);
+      yield* flush();
+      const plans = events.filter((event) => event.type === "turn.plan.updated");
+      NodeAssert.deepStrictEqual(
+        plans.map((event) => event.payload.plan),
+        [[{ step: "Recovered task", status: "inProgress" }]],
+      );
+      config.onEvent({
+        id: "todo-guard-abort",
+        timestamp,
+        parentId: null,
+        type: "abort",
+        data: { reason: "user_initiated" },
+      });
+      config.onEvent(signal);
+      yield* flush();
+      NodeAssert.equal(runtimeMock.state.lastSession.rpc.plan.readSqlTodos.mock.calls.length, 3);
       yield* adapter.stopSession(threadId);
     }),
   );

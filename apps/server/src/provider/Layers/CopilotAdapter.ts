@@ -24,6 +24,7 @@ import {
   type ProviderSession,
   type ProviderUserInputAnswers,
   RuntimeItemId,
+  type RuntimePlanStep,
   RuntimeRequestId,
   RuntimeTaskId,
   type RuntimeTaskUsage,
@@ -109,6 +110,7 @@ type SessionApproval = NonNullable<SessionApprovalDecision["approval"]>;
 type CopilotTaskList = Awaited<ReturnType<CopilotSession["rpc"]["tasks"]["list"]>>;
 type CopilotTaskInfo = CopilotTaskList["tasks"][number];
 type CopilotTaskStatus = CopilotTaskInfo["status"];
+type CopilotSqlTodos = Awaited<ReturnType<CopilotSession["rpc"]["plan"]["readSqlTodos"]>>;
 
 interface CopilotTaskState {
   description: string;
@@ -229,6 +231,8 @@ interface CopilotSessionContext {
   readonly pendingTaskCompletionTextByTurnId: Map<TurnId, string>;
   readonly emittedTurnDiffByTurnId: Map<TurnId, string>;
   readonly copilotTasks: Map<string, CopilotTaskState>;
+  todoRefreshTurnId: TurnId | undefined;
+  lastTodoPlan: { turnId: TurnId; plan: ReadonlyArray<RuntimePlanStep> } | undefined;
   readonly turnIdsWithAssistantText: Set<TurnId>;
   readonly turnIdsWithRootAssistantTextSinceToolStart: Set<TurnId>;
   readonly turnIdsWithSuccessfulToolCompletion: Set<TurnId>;
@@ -1407,6 +1411,19 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
             cause,
           }),
       }),
+    readTodos: (
+      context: CopilotSessionContext,
+    ): Effect.Effect<CopilotSqlTodos, ProviderAdapterRequestError> =>
+      Effect.tryPromise({
+        try: () => context.sdkSession.rpc.plan.readSqlTodos(),
+        catch: (cause) =>
+          new ProviderAdapterRequestError({
+            provider: PROVIDER,
+            method: "session.plan.readSqlTodos",
+            detail: detailFromCause(cause, "Failed to read Copilot todos."),
+            cause,
+          }),
+      }),
     readBackgroundTasks: (
       context: CopilotSessionContext,
     ): Effect.Effect<CopilotTaskList, ProviderAdapterRequestError> =>
@@ -2296,6 +2313,65 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
       ),
     );
 
+  const emitTodoPlanSnapshot = Effect.fn("CopilotAdapter.emitTodoPlanSnapshot")(
+    function* (context: CopilotSessionContext, raw: SessionEvent) {
+      const turnId = context.activeTurnId;
+      if (
+        !turnId ||
+        raw.agentId !== undefined ||
+        context.completedTurnIds.has(turnId) ||
+        isSdkEventBeforeQueuedTurn(context, turnId, raw.timestamp)
+      ) {
+        return;
+      }
+      context.todoRefreshTurnId = turnId;
+      // SQL todos carry execution progress; plan markdown and background jobs do not.
+      const todos = yield* copilotSdk.readTodos(context);
+      if (
+        context.stopped ||
+        context.activeTurnId !== turnId ||
+        context.completedTurnIds.has(turnId)
+      ) {
+        return;
+      }
+      const plan: RuntimePlanStep[] = todos.rows.flatMap((todo) => {
+        const step = trimOrUndefined(todo.title) ?? trimOrUndefined(todo.description);
+        if (!step) return [];
+        return [
+          {
+            step,
+            status:
+              todo.status === "done"
+                ? "completed"
+                : todo.status === "in_progress"
+                  ? "inProgress"
+                  : "pending",
+          },
+        ];
+      });
+      const previous = context.lastTodoPlan;
+      if (
+        previous?.turnId === turnId &&
+        previous.plan.length === plan.length &&
+        previous.plan.every(
+          (entry, index) =>
+            entry.step === plan[index]?.step && entry.status === plan[index]?.status,
+        )
+      )
+        return;
+      context.lastTodoPlan = { turnId, plan };
+      // Empty snapshots clear an existing task list, but do not create one on startup.
+      if (plan.length === 0 && (!previous || previous.plan.length === 0)) return;
+      yield* emit({
+        ...createBaseEvent({ threadId: context.threadId, turnId, raw }),
+        type: "turn.plan.updated",
+        payload: { plan },
+      });
+    },
+    // Progress is optional on older remote CLIs; a failed read must not fail the turn.
+    Effect.catch((error) => Effect.logDebug("Could not refresh Copilot plan progress", error)),
+  );
+
   const emitPlanSnapshot = (
     context: CopilotSessionContext,
     raw: SessionEvent,
@@ -2568,6 +2644,10 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         await runWithContext(emitPlanSnapshot(context, event));
         return;
       }
+      case "session.todos_changed": {
+        await runWithContext(emitTodoPlanSnapshot(context, event));
+        return;
+      }
       case "session.usage_info": {
         if (event.agentId) return;
         await emitAsync({
@@ -2611,6 +2691,10 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
           activeTurnId: turnId,
         });
         await runWithContext(emitTurnStarted(context, turnId, event));
+        // Restore persisted todos once per T3 turn, not on every SDK agent loop.
+        if (event.agentId === undefined && context.todoRefreshTurnId !== turnId) {
+          await runWithContext(emitTodoPlanSnapshot(context, event));
+        }
         await emitAsync({
           ...createBaseEvent({
             threadId: context.threadId,
@@ -3487,6 +3571,8 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
         pendingTaskCompletionTextByTurnId: new Map(),
         emittedTurnDiffByTurnId: new Map(),
         copilotTasks: new Map(),
+        todoRefreshTurnId: undefined,
+        lastTodoPlan: undefined,
         turnIdsWithAssistantText: new Set(),
         turnIdsWithRootAssistantTextSinceToolStart: new Set(),
         turnIdsWithSuccessfulToolCompletion: new Set(),
