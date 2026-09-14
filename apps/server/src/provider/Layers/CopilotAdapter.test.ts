@@ -2958,6 +2958,102 @@ it.layer(CopilotAdapterTestLayer)("CopilotAdapterLive", (it) => {
     }),
   );
 
+  it.effect("ignores client-owned SDK tasks while preserving agent task updates", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CopilotAdapter;
+      const threadId = asThreadId("copilot-client-owned-tasks");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      yield* adapter.sendTurn({ threadId, input: "Track background work" });
+      const config = runtimeMock.state.createSessionConfigs.at(-1);
+      NodeAssert.ok(config?.onEvent);
+      const { events, flush } = yield* collectTodoRuntimeEvents(adapter, config);
+      const timestamp = yield* nowIso;
+
+      runtimeMock.state.lastSession.rpc.tasks.list.mockResolvedValueOnce({
+        tasks: [
+          {
+            type: "client",
+            id: "other-client-task",
+            clientTaskId: "client-registration",
+            description: "Another client's work",
+            status: "completed",
+            startedAt: timestamp,
+            result: { value: "structured result" },
+          },
+          {
+            type: "agent",
+            id: "agent-task",
+            toolCallId: "delegate-tool",
+            description: "Explore code",
+            agentType: "explore",
+            prompt: "Inspect the change",
+            status: "completed",
+            startedAt: timestamp,
+            latestResponse: "Found the change",
+          },
+        ],
+      });
+      config.onEvent({
+        id: "client-task-snapshot",
+        timestamp,
+        parentId: null,
+        ephemeral: true,
+        type: "session.background_tasks_changed",
+        data: {},
+      });
+      yield* flush();
+
+      const tasks = events.filter(
+        (event) => event.type === "task.started" || event.type === "task.completed",
+      );
+      NodeAssert.deepStrictEqual(
+        tasks.map((event) => [event.type, event.payload.taskId]),
+        [
+          ["task.started", "delegate-tool"],
+          ["task.completed", "delegate-tool"],
+        ],
+      );
+      NodeAssert.equal(
+        tasks.find((event) => event.type === "task.completed")?.payload.summary,
+        "Found the change",
+      );
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
+  it.effect("preserves non-object JSON tool arguments without inventing argument keys", () =>
+    Effect.gen(function* () {
+      const adapter = yield* CopilotAdapter;
+      const threadId = asThreadId("copilot-json-tool-arguments");
+      yield* adapter.startSession({ threadId, runtimeMode: "full-access" });
+      yield* adapter.sendTurn({ threadId, input: "Use tools" });
+      const config = runtimeMock.state.createSessionConfigs.at(-1);
+      NodeAssert.ok(config?.onEvent);
+      const { events, flush } = yield* collectTodoRuntimeEvents(adapter, config);
+      const timestamp = yield* nowIso;
+      const inputs = ["text input", ["first", "second"], 0, false, null];
+      for (const [index, input] of inputs.entries()) {
+        config.onEvent({
+          id: `json-tool-start-${index}`,
+          timestamp,
+          parentId: null,
+          type: "tool.execution_start",
+          data: { toolCallId: `tool-${index}`, toolName: "custom_tool", arguments: input },
+        });
+      }
+      yield* flush();
+      NodeAssert.deepStrictEqual(
+        events.filter((event) => event.type === "item.started").map((event) => event.payload.data),
+        inputs.map((input, index) => ({
+          input,
+          toolCallId: `tool-${index}`,
+          toolName: "custom_tool",
+        })),
+      );
+      yield* adapter.stopSession(threadId);
+    }),
+  );
+
   it.effect("keeps shell task updates out of the agent roster without hiding custom agents", () =>
     Effect.gen(function* () {
       const adapter = yield* CopilotAdapter;

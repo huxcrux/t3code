@@ -108,7 +108,7 @@ type SessionPermissionRequest = SessionPermissionRequestedEvent["data"]["permiss
 type SessionApprovalDecision = Extract<PermissionRequestResult, { kind: "approve-for-session" }>;
 type SessionApproval = NonNullable<SessionApprovalDecision["approval"]>;
 type CopilotTaskList = Awaited<ReturnType<CopilotSession["rpc"]["tasks"]["list"]>>;
-type CopilotTaskInfo = CopilotTaskList["tasks"][number];
+type CopilotTaskInfo = Extract<CopilotTaskList["tasks"][number], { type: "agent" | "shell" }>;
 type CopilotTaskStatus = CopilotTaskInfo["status"];
 type CopilotSqlTodos = Awaited<ReturnType<CopilotSession["rpc"]["plan"]["readSqlTodos"]>>;
 
@@ -876,12 +876,16 @@ function toolLifecycleDataKind(toolMeta: ToolMeta | undefined): "edit" | "read" 
 function toolLifecycleData(input: {
   readonly toolCallId: string;
   readonly toolMeta: ToolMeta | undefined;
-  readonly arguments?: Record<string, unknown> | undefined;
+  readonly arguments?: unknown;
   readonly result?: unknown;
   readonly error?: unknown;
   readonly toolTelemetry?: unknown;
 }): Record<string, unknown> {
-  const argumentsData: Record<string, unknown> = input.arguments ? { ...input.arguments } : {};
+  const argumentsData: Record<string, unknown> = isStringRecord(input.arguments)
+    ? { ...input.arguments }
+    : input.arguments !== undefined
+      ? { input: input.arguments }
+      : {};
   const kind = toolLifecycleDataKind(input.toolMeta);
   if (input.toolMeta?.itemType !== "command_execution") {
     delete argumentsData.command;
@@ -2138,6 +2142,9 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
       }
       const taskList = yield* copilotSdk.readBackgroundTasks(context);
       for (const task of taskList.tasks) {
+        // Client-owned tasks are not provider agents or shells. T3 does not
+        // register them, so do not misclassify another client's work as an agent.
+        if (task.type === "client") continue;
         const taskId = copilotTaskId(task);
         if (!taskId) {
           continue;
@@ -2949,7 +2956,7 @@ export const makeCopilotAdapter = Effect.fn("makeCopilotAdapter")(function* (
             data: toolLifecycleData({
               toolCallId: event.data.toolCallId,
               toolMeta,
-              ...(event.data.arguments ? { arguments: event.data.arguments } : {}),
+              arguments: event.data.arguments,
             }),
           },
         });
