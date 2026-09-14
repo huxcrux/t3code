@@ -127,10 +127,20 @@ export const stopCopilotClient = Effect.fn("stopCopilotClient")(function* (
     }),
   );
 
+  // The fallback is part of cleanup, not a failure if the SDK completes it.
+  // Keep recovered shutdown diagnostics out of the callers' error logs.
+  if (forceStopAttempt._tag === "Resolved") {
+    yield* Effect.logDebug("Copilot client force-stop fallback completed", {
+      cleanupErrors: stopAttempt._tag === "Resolved" ? stopAttempt.cleanupErrors.length : 0,
+      gracefulStopFailures: stopAttempt._tag === "Rejected" ? 1 : 0,
+    });
+    return;
+  }
+
   return yield* new CopilotClientStopError({
     cleanupErrors: stopAttempt._tag === "Resolved" ? stopAttempt.cleanupErrors : [],
     ...(stopAttempt._tag === "Rejected" ? { stopCause: stopAttempt.cause } : {}),
-    ...(forceStopAttempt._tag === "Rejected" ? { forceStopCause: forceStopAttempt.cause } : {}),
+    forceStopCause: forceStopAttempt.cause,
   });
 });
 

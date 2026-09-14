@@ -33,25 +33,19 @@ function assertStdioConnection(connection: CopilotClientOptions["connection"]) {
 const POSIX_SHELL_FALLBACKS = ["/bin/bash", "/usr/bin/bash", "/bin/sh"] as const;
 
 describe("stopCopilotClient", () => {
-  it.effect("force stops and surfaces cleanup errors returned by the SDK", () =>
+  it.effect("succeeds when force stop recovers cleanup errors returned by the SDK", () =>
     Effect.gen(function* () {
       let forceStopCalls = 0;
       const cleanupError = new Error("runtime shutdown timed out");
 
-      const error = yield* stopCopilotClient({
+      yield* stopCopilotClient({
         stop: async () => [cleanupError],
         forceStop: async () => {
           forceStopCalls += 1;
         },
-      }).pipe(Effect.flip);
+      });
 
       NodeAssert.equal(forceStopCalls, 1);
-      NodeAssert.deepStrictEqual(error.cleanupErrors, [cleanupError]);
-      NodeAssert.equal(
-        error.message,
-        "Copilot client cleanup was incomplete (cleanupErrors=1, gracefulStopFailures=0, forceStopFailures=0).",
-      );
-      NodeAssert.doesNotMatch(error.message, /runtime shutdown timed out/);
     }),
   );
 
@@ -70,7 +64,22 @@ describe("stopCopilotClient", () => {
     }),
   );
 
-  it.effect("force stops when graceful SDK shutdown does not settle", () =>
+  it.effect("succeeds when force stop recovers a rejected graceful shutdown", () =>
+    Effect.gen(function* () {
+      let forceStopCalls = 0;
+      yield* stopCopilotClient({
+        stop: async () => {
+          throw new Error("connection closed during shutdown");
+        },
+        forceStop: async () => {
+          forceStopCalls += 1;
+        },
+      });
+      NodeAssert.equal(forceStopCalls, 1);
+    }),
+  );
+
+  it.effect("succeeds when force stop recovers a graceful shutdown timeout", () =>
     Effect.gen(function* () {
       let forceStopCalls = 0;
       const stopFiber = yield* stopCopilotClient({
@@ -78,16 +87,73 @@ describe("stopCopilotClient", () => {
         forceStop: async () => {
           forceStopCalls += 1;
         },
-      }).pipe(Effect.flip, Effect.forkChild);
+      }).pipe(Effect.forkChild({ startImmediately: true }));
 
-      yield* Effect.yieldNow;
+      yield* TestClock.adjust("5 seconds");
+      yield* Fiber.join(stopFiber);
+
+      NodeAssert.equal(forceStopCalls, 1);
+    }),
+  );
+
+  it.effect("preserves SDK cleanup errors when force stop also fails", () =>
+    Effect.gen(function* () {
+      const cleanupError = new Error("runtime shutdown timed out");
+      const forceStopCause = new Error("force-stop failure with private diagnostics");
+      const error = yield* stopCopilotClient({
+        stop: async () => [cleanupError],
+        forceStop: async () => {
+          throw forceStopCause;
+        },
+      }).pipe(Effect.flip);
+
+      NodeAssert.deepStrictEqual(error.cleanupErrors, [cleanupError]);
+      NodeAssert.equal(error.stopCause, undefined);
+      NodeAssert.equal(error.forceStopCause, forceStopCause);
+      NodeAssert.equal(
+        error.message,
+        "Copilot client cleanup was incomplete (cleanupErrors=1, gracefulStopFailures=0, forceStopFailures=1).",
+      );
+      NodeAssert.doesNotMatch(error.message, /runtime shutdown timed out|private diagnostics/);
+    }),
+  );
+
+  it.effect("preserves both causes when graceful and force stop reject", () =>
+    Effect.gen(function* () {
+      const stopCause = new Error("graceful stop failed");
+      const forceStopCause = new Error("force stop failed");
+      const error = yield* stopCopilotClient({
+        stop: async () => {
+          throw stopCause;
+        },
+        forceStop: async () => {
+          throw forceStopCause;
+        },
+      }).pipe(Effect.flip);
+
+      NodeAssert.deepStrictEqual(error.cleanupErrors, []);
+      NodeAssert.equal(error.stopCause, stopCause);
+      NodeAssert.equal(error.forceStopCause, forceStopCause);
+    }),
+  );
+
+  it.effect("preserves a graceful shutdown timeout when force stop fails", () =>
+    Effect.gen(function* () {
+      const forceStopCause = new Error("force stop failed");
+      const stopFiber = yield* stopCopilotClient({
+        stop: () => new Promise<Error[]>(() => undefined),
+        forceStop: async () => {
+          throw forceStopCause;
+        },
+      }).pipe(Effect.flip, Effect.forkChild({ startImmediately: true }));
+
       yield* TestClock.adjust("5 seconds");
       const error = yield* Fiber.join(stopFiber);
 
-      NodeAssert.equal(forceStopCalls, 1);
+      NodeAssert.equal(error.forceStopCause, forceStopCause);
       NodeAssert.equal(
         error.message,
-        "Copilot client cleanup was incomplete (cleanupErrors=0, gracefulStopFailures=1, forceStopFailures=0).",
+        "Copilot client cleanup was incomplete (cleanupErrors=0, gracefulStopFailures=1, forceStopFailures=1).",
       );
       NodeAssert.doesNotMatch(error.message, /timed out after 5 seconds/);
       NodeAssert.match(String(error.stopCause), /timed out after 5 seconds/);
