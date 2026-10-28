@@ -105,9 +105,9 @@ const CopilotProviderCapabilitiesV2 = {
   threads: {
     canCreateEmptyThread: true,
     canReadThreadSnapshot: true,
-    canRollbackThread: false,
-    canForkThread: false,
-    canForkFromTurn: false,
+    canRollbackThread: true,
+    canForkThread: true,
+    canForkFromTurn: true,
     canForkFromSubagentThread: false,
     exposesNativeThreadId: true,
   },
@@ -116,9 +116,9 @@ const CopilotProviderCapabilitiesV2 = {
     emitsTurnStarted: true,
     emitsTurnCompleted: true,
     supportsInterrupt: true,
-    supportsActiveSteering: false,
+    supportsActiveSteering: true,
     supportsSteeringByInterruptRestart: false,
-    supportsQueuedMessages: false,
+    supportsQueuedMessages: true,
     terminalStatusQuality: "strong",
   },
   streaming: {
@@ -173,8 +173,8 @@ const CopilotProviderCapabilitiesV2 = {
   checkpointing: {
     appCanCheckpointFilesystem: true,
     supportsNestedCheckpointScopes: false,
-    providerCanRollbackConversation: false,
-    providerRollbackReturnsSnapshot: false,
+    providerCanRollbackConversation: true,
+    providerRollbackReturnsSnapshot: true,
     providerCanReadConversationSnapshot: true,
   },
   identity: {
@@ -1088,8 +1088,8 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
         yield* emitProviderTurn(turn.providerTurn);
         yield* updateThread({
           status: disposition === "broken" ? "error" : "idle",
-          ...(!turn.compact && status === "completed"
-            ? { nativeConversationHeadRef: weakRef(turn.nativeId) }
+          ...(status === "completed" && turn.providerTurn.nativeTurnRef
+            ? { nativeConversationHeadRef: turn.providerTurn.nativeTurnRef }
             : {}),
         });
         yield* updateSession(disposition === "broken" ? "error" : "ready", detail ?? null);
@@ -1225,8 +1225,10 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
         const ownerSubagent = owner ? turn.subagents.get(owner) : undefined;
         switch (event.type) {
           case "user.message":
-            if (!owner) turn.consumed = true;
-            return;
+            if (owner || turn.consumed) return;
+            turn.consumed = true;
+            turn.providerTurn = { ...turn.providerTurn, nativeTurnRef: nativeRef(event.id) };
+            return yield* emitProviderTurn(turn.providerTurn);
           case "assistant.message_delta":
             if (!owner)
               yield* appendText(turn, "message", event.data.messageId, event.data.deltaContent);
@@ -1692,7 +1694,8 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
           providerThreadId: turnInput.providerThread.id,
           nodeId: turnInput.rootNodeId,
           runAttemptId: turnInput.attemptId,
-          nativeTurnRef: weakRef(nativeId),
+          // Set to the root user.message id once Copilot records it; rollback and fork cut there.
+          nativeTurnRef: null,
           ordinal: turnInput.providerTurnOrdinal,
           status: "running",
           startedAt,
@@ -1826,6 +1829,105 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
         } satisfies ProviderAdapter.ProviderAdapterV2ThreadSnapshot;
       });
 
+      /** Immediate sends join the active run, so the original send still settles the turn. */
+      const steer = Effect.fnUntraced(function* (
+        args: ProviderAdapter.ProviderAdapterV2SteerInput,
+      ) {
+        const turn = active;
+        const current = session;
+        const isActive = () =>
+          active === turn &&
+          turn !== undefined &&
+          !turn.compact &&
+          !turn.interruptRequested &&
+          turn.providerTurn.id === args.providerTurnId;
+        if (!current || !isActive())
+          return yield* protocolError(`Copilot turn ${args.providerTurnId} is not active`);
+        const message = yield* prompt(args.message);
+        if (!isActive())
+          return yield* protocolError(`Copilot turn ${args.providerTurnId} is not active`);
+        yield* tryCopilot("GitHub Copilot could not steer the turn.", () =>
+          current.send({ ...message, mode: "immediate" }),
+        );
+      });
+
+      /** Truncates native history at the user.message that opened the first discarded turn. */
+      const rollback = Effect.fnUntraced(function* (
+        args: ProviderAdapter.ProviderAdapterV2RollbackThreadInput,
+      ) {
+        const current = session;
+        if (!current || !validateThread(args.providerThread) || broken || closed)
+          return yield* protocolError("Copilot thread is not attached to this session");
+        if (active) return yield* protocolError("Cannot roll back while a Copilot turn is active");
+        const target = args.target.type === "provider_turn" ? args.target.providerTurn : undefined;
+        const eventId = copilotTurnBoundary(
+          args.providerThreadTurns,
+          args.providerThread.id,
+          target?.ordinal ?? 0,
+        );
+        if (eventId)
+          yield* tryCopilot("GitHub Copilot could not roll back the thread.", () =>
+            current.rpc.history.truncate({ eventId }),
+          );
+        lastProviderTurn = target;
+        yield* updateThread({ nativeConversationHeadRef: target?.nativeTurnRef ?? null });
+        return yield* snapshot(thread ?? args.providerThread);
+      });
+
+      /** Copies the source session natively, then attaches the copy to this session. */
+      const fork = Effect.fnUntraced(function* (
+        args: ProviderAdapter.ProviderAdapterV2ForkThreadInput,
+      ) {
+        const source = args.sourceProviderThread;
+        const sourceId = source.nativeThreadRef?.nativeId;
+        if (
+          !sourceId ||
+          source.driver !== COPILOT_PROVIDER ||
+          source.providerInstanceId !== options.instanceId
+        )
+          return yield* protocolError("Copilot fork source has no session on this instance");
+        let toEventId: string | undefined;
+        if (args.providerTurnId !== undefined) {
+          const turns = args.sourceProviderTurns ?? [];
+          const selected = turns.find((turn) => turn.id === args.providerTurnId);
+          if (!selected) return yield* protocolError("Copilot fork target turn is missing");
+          toEventId = copilotTurnBoundary(turns, source.id, selected.ordinal);
+        }
+        const forked = yield* tryCopilot("GitHub Copilot could not fork the session.", () =>
+          client.rpc.sessions.fork({ sessionId: sourceId, ...(toEventId ? { toEventId } : {}) }),
+        );
+        const now = yield* DateTime.now;
+        return yield* register({
+          threadId: args.targetThreadId,
+          modelSelection: args.modelSelection ?? input.modelSelection,
+          runtimePolicy: args.runtimePolicy ?? input.runtimePolicy,
+          existingProviderThread: {
+            ...source,
+            id: idAllocator.derive.providerThread({
+              driver: COPILOT_PROVIDER,
+              providerInstanceId: options.instanceId,
+              nativeThreadId: forked.sessionId,
+            }),
+            providerSessionId: input.providerSessionId,
+            appThreadId: args.targetThreadId,
+            ownerNodeId: args.ownerNodeId ?? null,
+            nativeThreadRef: nativeRef(forked.sessionId),
+            nativeConversationHeadRef: null,
+            status: "idle",
+            firstRunOrdinal: null,
+            lastRunOrdinal: null,
+            handoffIds: [],
+            pendingBackgroundTasks: [],
+            forkedFrom: {
+              providerThreadId: source.id,
+              ...(args.providerTurnId === undefined ? {} : { providerTurnId: args.providerTurnId }),
+            },
+            createdAt: now,
+            updatedAt: now,
+          },
+        });
+      });
+
       const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
         instanceId: options.instanceId,
         driver: COPILOT_PROVIDER,
@@ -1892,13 +1994,16 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
             ),
           ),
         steerTurn: (args) =>
-          Effect.fail(
-            new ProviderAdapter.ProviderAdapterSteerRunError({
-              driver: COPILOT_PROVIDER,
-              providerThreadId: args.providerThread.id,
-              providerTurnId: args.providerTurnId,
-              cause: "GitHub Copilot does not support steering an active turn in T3 Code.",
-            }),
+          steer(args).pipe(
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterSteerRunError({
+                  driver: COPILOT_PROVIDER,
+                  providerThreadId: args.providerThread.id,
+                  providerTurnId: args.providerTurnId,
+                  cause,
+                }),
+            ),
           ),
         interruptTurn: Effect.fn("CopilotAdapter.interruptTurn")(
           function* (args) {
@@ -1977,27 +2082,54 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
             ),
           ),
         rollbackThread: (args) =>
-          Effect.fail(
-            new ProviderAdapter.ProviderAdapterRollbackThreadError({
-              driver: COPILOT_PROVIDER,
-              providerThreadId: args.providerThread.id,
-              checkpointId: args.target.checkpointId,
-              cause: "GitHub Copilot does not support conversation rollback in T3 Code.",
-            }),
+          rollback(args).pipe(
+            commands.withPermits(1),
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterRollbackThreadError({
+                  driver: COPILOT_PROVIDER,
+                  providerThreadId: args.providerThread.id,
+                  checkpointId: args.target.checkpointId,
+                  cause,
+                }),
+            ),
           ),
         forkThread: (args) =>
-          Effect.fail(
-            new ProviderAdapter.ProviderAdapterForkThreadError({
-              driver: COPILOT_PROVIDER,
-              providerThreadId: args.sourceProviderThread.id,
-              cause: "GitHub Copilot does not support native forks in T3 Code.",
-            }),
+          fork(args).pipe(
+            commands.withPermits(1),
+            Effect.mapError(
+              (cause) =>
+                new ProviderAdapter.ProviderAdapterForkThreadError({
+                  driver: COPILOT_PROVIDER,
+                  providerThreadId: args.sourceProviderThread.id,
+                  cause,
+                }),
+            ),
           ),
       };
       return runtime;
     }),
   });
 });
+
+/** The user.message id opening the first recorded turn after `ordinal`, if any. */
+export function copilotTurnBoundary(
+  turns: ReadonlyArray<OrchestrationV2ProviderTurn>,
+  providerThreadId: ProviderThreadId,
+  ordinal: number,
+): string | undefined {
+  let next: OrchestrationV2ProviderTurn | undefined;
+  for (const turn of turns)
+    if (
+      turn.providerThreadId === providerThreadId &&
+      turn.ordinal > ordinal &&
+      turn.nativeTurnRef?.strength === "strong" &&
+      turn.nativeTurnRef.nativeId &&
+      (!next || turn.ordinal < next.ordinal)
+    )
+      next = turn;
+  return next?.nativeTurnRef?.nativeId ?? undefined;
+}
 
 function normalizeEndpoint(raw: string | undefined): string | undefined {
   if (!raw) return undefined;

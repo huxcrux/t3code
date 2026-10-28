@@ -8,15 +8,18 @@ import type {
   SessionEvent,
 } from "@github/copilot-sdk";
 import {
+  CheckpointId,
   MessageId,
   NodeId,
   ProjectId,
   ProviderInstanceId,
   ProviderSessionId,
+  ProviderTurnId,
   RunAttemptId,
   RunId,
   ThreadId,
   type OrchestrationV2AppThread,
+  type OrchestrationV2ProviderTurn,
   type OrchestrationV2ProviderThread,
   type RuntimeMode,
 } from "@t3tools/contracts";
@@ -33,7 +36,7 @@ import * as Schema from "effect/Schema";
 import * as Stream from "effect/Stream";
 
 import { CopilotSettings } from "../settings.ts";
-import { makeCopilotAdapterV2 } from "./adapter.ts";
+import { copilotTurnBoundary, makeCopilotAdapterV2 } from "./adapter.ts";
 import { APPROVE_ONCE } from "./approvals.ts";
 
 const testLayer = Layer.mergeAll(
@@ -75,8 +78,15 @@ const sdkEvent = (
 const makeFakeCopilot = () => {
   let config: SessionConfig | undefined;
   const sends: Array<ReturnType<typeof deferredPromise<undefined>>> = [];
+  const steers: Array<{ readonly prompt: string; readonly mode?: string }> = [];
+  const truncations: string[] = [];
+  const forks: Array<{ readonly sessionId: string; readonly toEventId?: string }> = [];
   const session = {
     sessionId: "native-session",
+    send: async (options: { readonly prompt: string; readonly mode?: string }) => {
+      steers.push(options);
+      return "steer-message";
+    },
     sendAndWait: () => {
       const pending = deferredPromise<undefined>();
       sends.push(pending);
@@ -88,9 +98,15 @@ const makeFakeCopilot = () => {
     rpc: {
       model: { switchTo: async () => ({}) },
       plan: { readSqlTodos: async () => ({ todos: [] }) },
-      history: { compact: async () => ({}) },
+      history: {
+        compact: async () => ({}),
+        truncate: async ({ eventId }: { readonly eventId: string }) => {
+          truncations.push(eventId);
+          return { eventsRemoved: 2 };
+        },
+      },
     },
-  } as unknown as CopilotSession;
+  } as { sessionId: string } as unknown as CopilotSession;
   const client = {
     start: async () => {},
     stop: async () => [],
@@ -99,9 +115,18 @@ const makeFakeCopilot = () => {
       config = next;
       return session;
     },
-    resumeSession: async (_id: string, next: SessionConfig) => {
+    resumeSession: async (id: string, next: SessionConfig) => {
       config = next;
+      (session as { sessionId: string }).sessionId = id;
       return session;
+    },
+    rpc: {
+      sessions: {
+        fork: async (request: { readonly sessionId: string; readonly toEventId?: string }) => {
+          forks.push(request);
+          return { sessionId: "forked-session" };
+        },
+      },
     },
   } as unknown as CopilotClient;
   const requireConfig = () => {
@@ -110,13 +135,19 @@ const makeFakeCopilot = () => {
   };
   return {
     client,
+    steers,
+    truncations,
+    forks,
     config: requireConfig,
     emit: (event: SessionEvent) => Effect.sync(() => requireConfig().onEvent?.(event)),
     settle: () => Effect.sync(() => sends.shift()?.resolve(undefined)),
   };
 };
 
-const makeHarness = Effect.fnUntraced(function* (runtimeMode: RuntimeMode = "full-access") {
+const makeHarness = Effect.fnUntraced(function* (
+  runtimeMode: RuntimeMode = "full-access",
+  attachThread = true,
+) {
   const fake = makeFakeCopilot();
   // The adapter resolves the configured CLI before handing it to the (faked) SDK client.
   const fileSystem = yield* FileSystem.FileSystem;
@@ -150,11 +181,9 @@ const makeHarness = Effect.fnUntraced(function* (runtimeMode: RuntimeMode = "ful
     }),
     Effect.forkScoped,
   );
-  const providerThread = yield* runtime.ensureThread({
-    threadId: THREAD_ID,
-    modelSelection,
-    runtimePolicy,
-  });
+  const providerThread = attachThread
+    ? yield* runtime.ensureThread({ threadId: THREAD_ID, modelSelection, runtimePolicy })
+    : undefined;
   const takeEvent = Effect.fnUntraced(function* <
     T extends ProviderAdapter.ProviderAdapterV2Event["type"],
   >(type: T) {
@@ -165,10 +194,15 @@ const makeHarness = Effect.fnUntraced(function* (runtimeMode: RuntimeMode = "ful
     }
   });
   const startTurn = Effect.fnUntraced(function* () {
-    yield* runtime.startTurn(yield* turnInput(providerThread, runtimePolicy));
+    if (!providerThread) throw new Error("No Copilot thread is attached");
+    const input = yield* turnInput(providerThread, runtimePolicy);
+    yield* runtime.startTurn(input);
     yield* fake.emit(sdkEvent("user.message", { content: "Hello Copilot" }));
+    return input;
   });
-  return { fake, runtime, all, takeEvent, startTurn };
+  const providerTurns = () =>
+    all.flatMap((event) => (event.type === "provider_turn.updated" ? [event.providerTurn] : []));
+  return { fake, runtime, all, takeEvent, startTurn, providerThread, providerTurns };
 });
 
 const turnInput = Effect.fnUntraced(function* (
@@ -345,6 +379,110 @@ describe("CopilotAdapterV2", () => {
       void fake.config().onPermissionRequest!(request, { sessionId: "native-session" } as never);
       const pending = yield* takeEvent("runtime_request.updated");
       assert.strictEqual(pending.runtimeRequest.status, "pending");
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("steers the active turn without ending it early", () =>
+    Effect.gen(function* () {
+      const { fake, runtime, all, takeEvent, startTurn, providerThread, providerTurns } =
+        yield* makeHarness();
+      const input = yield* startTurn();
+      const openingMessageId = `event-${eventSequence}`;
+      const { providerTurn } = yield* takeEvent("provider_turn.updated");
+      yield* runtime.steerTurn({
+        threadId: THREAD_ID,
+        runId: input.runId,
+        providerThread: providerThread!,
+        providerTurnId: providerTurn.id,
+        message: { ...input.message, text: "Also check the tests" },
+      });
+      assert.deepStrictEqual(fake.steers, [{ prompt: "Also check the tests", mode: "immediate" }]);
+      yield* fake.emit(sdkEvent("user.message", { content: "Also check the tests" }));
+      assert.isFalse(all.some((event) => event.type === "turn.terminal"));
+      yield* fake.emit(sdkEvent("session.idle", {}));
+      yield* fake.settle();
+      const terminal = yield* takeEvent("turn.terminal");
+      assert.strictEqual(terminal.status, "completed");
+      // The opening user.message, not the steer, marks where the turn starts.
+      const final = providerTurns().at(-1)!;
+      assert.strictEqual(final.nativeTurnRef?.strength, "strong");
+      assert.strictEqual(final.nativeTurnRef?.nativeId, openingMessageId);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("rolls back native history from the first discarded turn", () =>
+    Effect.gen(function* () {
+      const { fake, runtime, takeEvent, startTurn, providerThread, providerTurns } =
+        yield* makeHarness();
+      yield* startTurn();
+      yield* fake.emit(sdkEvent("session.idle", {}));
+      yield* fake.settle();
+      yield* takeEvent("turn.terminal");
+      const turn = providerTurns().at(-1)!;
+      const boundary = turn.nativeTurnRef?.nativeId;
+      assert.isString(boundary);
+
+      const kept = yield* runtime.rollbackThread({
+        providerThread: providerThread!,
+        target: {
+          type: "provider_turn",
+          checkpointId: CheckpointId.make("checkpoint-1"),
+          appRunOrdinal: 1,
+          providerTurn: turn,
+        },
+        providerThreadTurns: [turn],
+      });
+      assert.deepStrictEqual(fake.truncations, []);
+      assert.deepStrictEqual(kept.providerThread.nativeConversationHeadRef, turn.nativeTurnRef);
+
+      const reset = yield* runtime.rollbackThread({
+        providerThread: providerThread!,
+        target: {
+          type: "thread_start",
+          checkpointId: CheckpointId.make("checkpoint-0"),
+          appRunOrdinal: 0,
+        },
+        providerThreadTurns: [turn],
+      });
+      assert.deepStrictEqual(fake.truncations, [boundary]);
+      assert.isNull(reset.providerThread.nativeConversationHeadRef);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("forks a source session up to the turn after the selected one", () =>
+    Effect.gen(function* () {
+      const source = yield* makeHarness();
+      const { fake, runtime } = yield* makeHarness("full-access", false);
+      const sourceThread = source.providerThread!;
+      const turn = (ordinal: number, nativeId: string | null): OrchestrationV2ProviderTurn => ({
+        id: ProviderTurnId.make(`provider-turn-${ordinal}`),
+        providerThreadId: sourceThread.id,
+        nodeId: NodeId.make(`node-${ordinal}`),
+        runAttemptId: null,
+        nativeTurnRef:
+          nativeId === null ? null : { driver: sourceThread.driver, nativeId, strength: "strong" },
+        ordinal,
+        status: "completed",
+        startedAt: null,
+        completedAt: null,
+      });
+      const turns = [turn(1, "user-1"), turn(2, null), turn(3, "user-3")];
+      const targetThreadId = ThreadId.make("thread-copilot-fork");
+      const forked = yield* runtime.forkThread({
+        sourceProviderThread: sourceThread,
+        sourceProviderTurns: turns,
+        providerTurnId: turns[0]!.id,
+        targetThreadId,
+      });
+      assert.deepStrictEqual(fake.forks, [{ sessionId: "native-session", toEventId: "user-3" }]);
+      assert.strictEqual(forked.nativeThreadRef?.nativeId, "forked-session");
+      assert.strictEqual(forked.appThreadId, targetThreadId);
+      assert.notStrictEqual(forked.id, sourceThread.id);
+      assert.deepStrictEqual(forked.forkedFrom, {
+        providerThreadId: sourceThread.id,
+        providerTurnId: turns[0]!.id,
+      });
+      assert.isUndefined(copilotTurnBoundary(turns, sourceThread.id, 3));
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 });

@@ -25,9 +25,9 @@ your plan or organization policy changes.
 Copilot supports every [permission mode](./permission-modes.md). Plan mode shows
 Copilot's plan in the thread; send a follow-up to implement it.
 
-Copilot subagents appear as their own threads under the conversation.
-Steering a running turn, conversation rewind, and forking are unavailable.
-Interrupt the turn and send a new message instead.
+Copilot subagents appear as their own threads under the conversation. You can
+steer a running turn, queue follow-ups, rewind the conversation, and fork a
+thread from any completed turn. Copilot token use appears on **Usage**.
 
 Copilot can use T3 Code's tools. Install, sign in, and update Copilot on each
 host where you want it to run; connecting devices do not need it installed.

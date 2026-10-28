@@ -40,6 +40,7 @@ import {
   enrichCopilotSnapshot,
 } from "./status.ts";
 import { makeCopilotTextGeneration } from "./textGeneration.ts";
+import { copilotUsageReader } from "./usage.ts";
 
 const DRIVER_KIND = ProviderDriverKind.make("copilot");
 const decodeCopilotSettings = Schema.decodeSync(CopilotSettings);
@@ -59,9 +60,10 @@ export type CopilotDriverEnv =
   | ProviderLatestVersions.ProviderLatestVersions
   | Path.Path;
 
-export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv> = {
+export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv, Path.Path> = {
   driverKind: DRIVER_KIND,
   metadata: { displayName: "GitHub Copilot", supportsMultipleInstances: true },
+  usage: copilotUsageReader,
   configSchema: CopilotSettings,
   defaultConfig: () => decodeCopilotSettings({}),
   create: Effect.fn("CopilotDriver.create")(function* ({
