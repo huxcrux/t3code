@@ -135,15 +135,23 @@ export const checkCopilotProviderStatus = Effect.fn("checkCopilotProviderStatus"
     ),
     (client) =>
       Effect.gen(function* () {
-        const [status, authStatus] = yield* tryCopilot(
+        const [status, authStatus, currentAuth] = yield* tryCopilot(
           "Failed to start GitHub Copilot.",
           async () => {
             await client.start();
-            return Promise.all([client.getStatus(), client.getAuthStatus()]);
+            return Promise.all([
+              client.getStatus(),
+              client.getAuthStatus(),
+              client.rpc.account.getCurrentAuth().catch(() => undefined),
+            ]);
           },
         );
         const version = trimOrUndefined(status.version) ?? null;
-        const auth = authFromCopilotStatus(authStatus);
+        const copilotUser =
+          currentAuth?.authInfo && "copilotUser" in currentAuth.authInfo
+            ? currentAuth.authInfo.copilotUser
+            : undefined;
+        const auth = authFromCopilotStatus(authStatus, copilotUser);
         if (!authStatus.isAuthenticated) {
           return snapshot({ installed: true, version, ...auth });
         }

@@ -3,7 +3,7 @@ import type { PermissionRequest } from "@github/copilot-sdk";
 import { ProviderInstanceId } from "@t3tools/contracts";
 
 import { permissionAutoApproved, permissionRequestKind } from "./approvals.ts";
-import { copilotSessionModelConfig } from "./runtime.ts";
+import { authFromCopilotStatus, copilotSessionModelConfig } from "./runtime.ts";
 import { stripCopilotShellControlLines } from "./toolPresentation.ts";
 
 const shell = { kind: "shell", fullCommandText: "ls" } as unknown as PermissionRequest;
@@ -57,5 +57,52 @@ describe("stripCopilotShellControlLines", () => {
       stripCopilotShellControlLines("hello\r\n<exited with exit code 0>\n"),
       "hello",
     );
+  });
+});
+
+describe("authFromCopilotStatus", () => {
+  const status = {
+    isAuthenticated: true,
+    authType: "user",
+    login: "octocat",
+    host: "https://github.com",
+  } as const;
+
+  it("labels the subscription plan and reports the login as the account identity", () => {
+    const cases = [
+      [
+        { copilot_plan: "individual", access_type_sku: "monthly_subscriber_quota" },
+        "Copilot Pro Subscription",
+      ],
+      [
+        { copilot_plan: "individual_pro", access_type_sku: "plus_monthly_subscriber_quota" },
+        "Copilot Pro+ Subscription",
+      ],
+      [
+        { copilot_plan: "individual", access_type_sku: "free_limited_copilot" },
+        "Copilot Free Subscription",
+      ],
+      [
+        { copilot_plan: "business", access_type_sku: "copilot_for_business_seat_quota" },
+        "Copilot Business Subscription",
+      ],
+      [undefined, undefined],
+    ] as const;
+    for (const [user, label] of cases) {
+      assert.deepStrictEqual(authFromCopilotStatus(status, user).auth, {
+        status: "authenticated",
+        type: "user",
+        ...(label ? { label } : {}),
+        email: "@octocat",
+      });
+    }
+  });
+
+  it("keeps non-github.com hosts visible", () => {
+    const auth = authFromCopilotStatus(
+      { ...status, authType: "gh-cli", host: "https://ghe.example.com" },
+      undefined,
+    ).auth;
+    assert.strictEqual(auth.label, "GitHub CLI · ghe.example.com");
   });
 });

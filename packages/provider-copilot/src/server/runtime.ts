@@ -357,33 +357,67 @@ const AUTH_TYPE_LABELS: Partial<Record<string, string>> = {
   "api-key": "API key",
 };
 
-export function authFromCopilotStatus(status: GetAuthStatusResponse): {
+export interface CopilotPlanInfo {
+  readonly copilot_plan?: string | undefined;
+  readonly access_type_sku?: string | undefined;
+}
+
+// `copilot_plan` alone cannot tell Pro from Pro+ or Free; the access SKU can.
+export function copilotPlanLabel(user: CopilotPlanInfo | undefined): string | undefined {
+  const plan = trimOrUndefined(user?.copilot_plan)?.toLowerCase();
+  const sku = trimOrUndefined(user?.access_type_sku)?.toLowerCase() ?? "";
+  const tier =
+    sku.includes("free_limited") || plan === "free"
+      ? "Free"
+      : sku.includes("educational") || plan === "edu"
+        ? "Education"
+        : sku.startsWith("plus_") || plan === "individual_pro" || plan === "pro_plus"
+          ? "Pro+"
+          : plan === "individual" || plan === "pro"
+            ? "Pro"
+            : plan === "business"
+              ? "Business"
+              : plan === "enterprise"
+                ? "Enterprise"
+                : plan
+                  ? plan.replace(/[_-]+/g, " ").replace(/\b\w/g, (char) => char.toUpperCase())
+                  : undefined;
+  return tier ? `Copilot ${tier} Subscription` : undefined;
+}
+
+export function authFromCopilotStatus(
+  status: GetAuthStatusResponse,
+  user?: CopilotPlanInfo,
+): {
   readonly status: Exclude<ServerProviderState, "disabled">;
   readonly auth: ServerProviderAuth;
   readonly message?: string;
 } {
   const type = trimOrUndefined(status.authType);
+  const host = trimOrUndefined(status.host)?.replace(/^https?:\/\//, "");
   const label =
     [
-      type ? AUTH_TYPE_LABELS[type] : undefined,
-      status.login ? `@${status.login}` : undefined,
-      trimOrUndefined(status.host)?.replace(/^https?:\/\//, ""),
+      copilotPlanLabel(user) ?? (type ? AUTH_TYPE_LABELS[type] : undefined),
+      host && host !== "github.com" ? host : undefined,
     ]
       .filter((part): part is string => part !== undefined && part.length > 0)
-      .join(" - ") || undefined;
+      .join(" · ") || undefined;
+  const login = trimOrUndefined(status.login);
+  const identity = {
+    ...(type ? { type } : {}),
+    ...(label ? { label } : {}),
+    ...(login ? { email: `@${login}` } : {}),
+  };
   if (!status.isAuthenticated) {
     return {
       status: "error",
-      auth: { status: "unauthenticated", ...(type ? { type } : {}), ...(label ? { label } : {}) },
+      auth: { status: "unauthenticated", ...identity },
       message:
         trimOrUndefined(status.statusMessage) ??
         "GitHub Copilot is not authenticated. Run `copilot login` on this T3 server host.",
     };
   }
-  return {
-    status: "ready",
-    auth: { status: "authenticated", ...(type ? { type } : {}), ...(label ? { label } : {}) },
-  };
+  return { status: "ready", auth: { status: "authenticated", ...identity } };
 }
 
 export function usageLimitsFromCopilotQuota(
