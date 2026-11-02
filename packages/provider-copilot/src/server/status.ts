@@ -31,7 +31,7 @@ import {
   type CreateCopilotClient,
 } from "./runtime.ts";
 
-export const COPILOT_PRESENTATION = {
+const COPILOT_PRESENTATION = {
   displayName: "GitHub Copilot",
   showInteractionModeToggle: true,
   reportsContextWindow: true,
@@ -61,7 +61,7 @@ export const buildInitialCopilotProviderSnapshot = Effect.fn("buildInitialCopilo
   },
 );
 
-export function skillsFromCopilotSdk(
+function skillsFromCopilotSdk(
   result: Awaited<ReturnType<CopilotClient["rpc"]["skills"]["discover"]>>,
 ): ReadonlyArray<ServerProviderSkill> {
   return result.skills.flatMap((skill) => {
@@ -82,7 +82,7 @@ export function skillsFromCopilotSdk(
   });
 }
 
-export function formatCopilotProbeError(cause: unknown): {
+function formatCopilotProbeError(cause: unknown): {
   readonly installed: boolean;
   readonly message: string;
 } {

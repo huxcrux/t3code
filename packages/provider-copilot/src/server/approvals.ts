@@ -18,7 +18,7 @@ export type UserInputRequest = Parameters<NonNullable<SessionConfig["onUserInput
 type UserInputResponse = Awaited<ReturnType<NonNullable<SessionConfig["onUserInputRequest"]>>>;
 
 export const APPROVE_ONCE = { kind: "approve-once" } satisfies PermissionRequestResult;
-export const REJECT = { kind: "reject" } satisfies PermissionRequestResult;
+const REJECT = { kind: "reject" } satisfies PermissionRequestResult;
 export const USER_NOT_AVAILABLE = { kind: "user-not-available" } satisfies PermissionRequestResult;
 
 function managedApprovalRequired(request: PermissionRequest, promptRequest: PromptRequest) {

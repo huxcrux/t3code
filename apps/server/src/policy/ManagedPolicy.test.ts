@@ -355,7 +355,7 @@ it.layer(NodeServices.layer)("ManagedPolicy.load", (it) => {
           organization: "Example Corp",
           limits: {
             providers: {
-              allowedDrivers: ["claudeAgent", "codex"],
+              allowedDrivers: ["claudeAgent", "codex", "copilot"],
               instances: {
                 claudeAgent: {
                   locked: true,
@@ -370,7 +370,7 @@ it.layer(NodeServices.layer)("ManagedPolicy.load", (it) => {
       );
       assert.deepEqual<unknown>(policy.summary?.limits, {
         providers: {
-          allowedDrivers: ["claudeAgent", "codex"],
+          allowedDrivers: ["claudeAgent", "codex", "copilot"],
           lockedInstanceFields: {
             claudeAgent: ["config.binaryPath", "environment.CLAUDE_CODE_USE_BEDROCK"],
           },
