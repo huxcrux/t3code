@@ -127,6 +127,10 @@ OpenCode replay transcript
   -> OpenCode SDK requests/responses plus ordered SSE events
   -> consumed by OpenCodeAdapter
 
+Copilot replay transcript
+  -> logical JSON-RPC frames between the real Copilot SDK and a replayed CLI process
+  -> consumed by CopilotAdapter
+
 ACP replay transcript
   -> logical JSON-RPC requests/responses/notifications over a strict NDJSON peer
   -> consumed by AcpAdapter and a provider flavor (Grok or ACP Registry)

@@ -173,6 +173,8 @@ export type OrchestratorFixtureInputStep =
       readonly type: "message";
       readonly text: string;
       readonly attachments?: ReadonlyArray<ChatAttachment>;
+      /** Overrides the variant's selection for this turn. */
+      readonly modelSelection?: ModelSelection;
     }
   | {
       readonly type: "queue_message";
@@ -312,6 +314,11 @@ export const CLAUDE_MODEL_SELECTION = {
 export const CURSOR_MODEL_SELECTION = {
   instanceId: ProviderInstanceId.make("cursor"),
   model: "composer-2.5",
+} satisfies ModelSelection;
+
+export const COPILOT_MODEL_SELECTION = {
+  instanceId: ProviderInstanceId.make("copilot"),
+  model: "claude-haiku-5.5",
 } satisfies ModelSelection;
 
 export const MUSE_MODEL_SELECTION = {
@@ -557,7 +564,7 @@ export function materializeFixtureInput(input: {
                   commandName: `message-${messageIndex}`,
                 }),
                 ids,
-                modelSelection: input.modelSelection,
+                modelSelection: step.modelSelection ?? input.modelSelection,
                 messageId: yield* idAllocator.allocate.message({
                   threadId: ids.threadId,
                   ordinal: messageIndex,
