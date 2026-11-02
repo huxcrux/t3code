@@ -52,8 +52,13 @@ import { makeProviderFailure } from "@t3tools/provider-core/server/failure";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSession from "@t3tools/provider-core/server/mcpSession";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
+import {
+  backgroundWorkNotification,
+  type BackgroundWorkReport,
+} from "@t3tools/provider-core/server/notification";
 import { t3OrchestrationSystemPrompt } from "@t3tools/provider-core/server/orchestrationInstructions";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as ProviderHost from "@t3tools/provider-core/server/ProviderHost";
 import { buildRuntimeInstructions } from "@t3tools/provider-core/server/runtimeInstructions";
 import { turnScopedSelectionTransition } from "@t3tools/provider-core/server/selectionTransition";
@@ -231,6 +236,8 @@ interface Subagent {
   readonly target: Target;
   readonly appThread: OrchestrationV2AppThread;
   readonly prompt: string;
+  /** Background tasks return a placeholder at once and finish on `subagent.completed`. */
+  readonly background: boolean;
   title: string;
   model: string | null;
   status: OrchestrationV2TurnItemStatus;
@@ -246,6 +253,8 @@ interface ActiveTurn {
   readonly entries: Map<string, Entry>;
   readonly dirty: Set<string>;
   readonly subagents: Map<string, Subagent>;
+  /** Child events carry the agent id that `subagent.started` pairs with the task call. */
+  readonly subagentsByAgentId: Map<string, Subagent>;
   readonly done: Deferred.Deferred<void>;
   readonly compact: boolean;
   todoPlanId?: PlanId;
@@ -328,6 +337,51 @@ function eventOwner(event: SessionEvent): string | undefined {
   return typeof data.parentToolCallId === "string" ? data.parentToolCallId : undefined;
 }
 
+/** A root notification that makes Copilot resume work on its own after the session went idle. */
+function wakeReport(event: SessionEvent): BackgroundWorkReport | undefined {
+  if (event.type !== "system.notification" || eventOwner(event)) return undefined;
+  const kind = event.data.kind;
+  switch (kind.type) {
+    case "instruction_discovered":
+      return undefined;
+    case "shell_completed":
+    case "shell_detached_completed":
+      return {
+        kind: "command",
+        label: kind.description,
+        outcome: "completed",
+        ...(kind.type === "shell_completed" && kind.exitCode !== undefined
+          ? { exitCode: kind.exitCode }
+          : {}),
+      };
+    case "agent_completed":
+    case "agent_idle":
+      return {
+        kind: "subagent",
+        label: kind.displayName ?? kind.description,
+        outcome:
+          kind.type === "agent_completed" && kind.status === "failed" ? "failed" : "completed",
+      };
+    case "workflow_completed":
+      return {
+        kind: "background_task",
+        label: kind.workflowName,
+        outcome:
+          kind.status === "completed"
+            ? "completed"
+            : kind.status === "error"
+              ? "failed"
+              : kind.status === "paused"
+                ? "updated"
+                : "cancelled",
+      };
+    default:
+      return { kind: "background_task", outcome: "updated" };
+  }
+}
+
+const DETACHED_SHELL_ID = /shellId: ([\w-]+)/;
+
 function errorMessage(cause: unknown, fallback: string): string {
   const error = Cause.isCause(cause) ? Cause.squash(cause) : cause;
   if (error && typeof error === "object" && "detail" in error && typeof error.detail === "string")
@@ -343,6 +397,7 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
+  const continuationRequests = yield* ProviderContinuationRequests.ProviderContinuationRequests;
   const createClient = options.createClient ?? defaultCreateCopilotClient;
   const resolveSelection = (selection: ModelSelection) =>
     (options.models ?? Effect.succeed([])).pipe(
@@ -427,6 +482,11 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
       let appliedPermissionMode: "assisted" | "manual" | undefined;
       const pending = new Map<RuntimeRequestId, PendingRequest>();
       let nextLocalId = 0;
+      let lastRoute: { threadId: ThreadId; providerThreadId: ProviderThreadId } | undefined;
+      /** Work Copilot resumed after T3 settled the turn, held for the continuation turn. */
+      let wake: Inbox[] | undefined;
+      const detachedShellCalls = new Set<string>();
+      const detachedShells = new Set<string>();
 
       const emit = (event: ProviderAdapter.ProviderAdapterV2Event) =>
         Queue.offer(events, event).pipe(Effect.asVoid);
@@ -821,6 +881,7 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
           },
           appThread,
           prompt,
+          background: stringArgument(data.arguments, "mode") === "background",
           title,
           model: stringArgument(data.arguments, "model") ?? null,
           status: "running",
@@ -1231,7 +1292,9 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
         const turn = active;
         if (!turn || (turn.compact && event.type.startsWith("session.compaction"))) return;
         const owner = eventOwner(event);
-        const ownerSubagent = owner ? turn.subagents.get(owner) : undefined;
+        const ownerSubagent = owner
+          ? (turn.subagents.get(owner) ?? turn.subagentsByAgentId.get(owner))
+          : undefined;
         switch (event.type) {
           case "user.message":
             if (owner || turn.consumed) return;
@@ -1254,6 +1317,8 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
           case "assistant.message":
             if (!owner)
               yield* appendText(turn, "message", event.data.messageId, "", event.data.content);
+            else if (ownerSubagent?.background && event.data.content.trim())
+              ownerSubagent.result = event.data.content.trim();
             return;
           case "assistant.reasoning_delta":
             if (!owner)
@@ -1301,6 +1366,7 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
             const data = event.data;
             const sub = owner ? undefined : turn.subagents.get(data.toolCallId);
             if (sub) {
+              if (sub.background && data.success) return;
               sub.status = data.success ? "completed" : "failed";
               sub.result =
                 trimOrUndefined(data.result?.content) ??
@@ -1327,12 +1393,15 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
           case "subagent.failed": {
             const sub = turn.subagents.get(event.data.toolCallId);
             if (!sub) return;
+            if (event.agentId) turn.subagentsByAgentId.set(event.agentId, sub);
             sub.model = event.data.model ?? sub.model;
             if (event.type === "subagent.failed") {
               sub.status = "failed";
               sub.result = sub.result ?? trimOrUndefined(event.data.error) ?? null;
             } else if (event.type === "subagent.completed" && event.data.cancelled) {
               sub.status = "cancelled";
+            } else if (event.type === "subagent.completed" && sub.background) {
+              sub.status = "completed";
             }
             return yield* publishSubagent(turn, sub);
           }
@@ -1402,7 +1471,58 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
         }
       });
 
-      const handleInbox = Effect.fnUntraced(function* (entry: Inbox) {
+      const trackDetachedShells = (event: SessionEvent) => {
+        if (eventOwner(event)) return;
+        if (event.type === "tool.execution_start") {
+          const args = event.data.arguments as { readonly detach?: unknown } | undefined;
+          if (event.data.toolName === "bash" && args?.detach === true)
+            detachedShellCalls.add(event.data.toolCallId);
+          if (event.data.toolName === "stop_bash") {
+            const shellId = stringArgument(event.data.arguments, "shellId");
+            if (shellId) detachedShells.delete(shellId);
+          }
+        } else if (event.type === "tool.execution_complete") {
+          if (!detachedShellCalls.delete(event.data.toolCallId) || !event.data.success) return;
+          const shellId = DETACHED_SHELL_ID.exec(event.data.result?.content ?? "")?.[1];
+          detachedShells.add(shellId ?? event.data.toolCallId);
+        } else if (
+          event.type === "system.notification" &&
+          (event.data.kind.type === "shell_detached_completed" ||
+            event.data.kind.type === "shell_completed")
+        ) {
+          detachedShells.delete(event.data.kind.shellId);
+        }
+      };
+      /** Copilot keeps working after `session.idle` when detached work reports back; hold that run for a continuation turn. */
+      const bufferWake = Effect.fnUntraced(function* (entry: Inbox) {
+        if (wake) {
+          wake.push(entry);
+          return true;
+        }
+        const report = entry.type === "event" ? wakeReport(entry.event) : undefined;
+        const route = lastRoute;
+        if (!report || !route) return false;
+        wake = [entry];
+        yield* continuationRequests.offer({
+          threadId: route.threadId,
+          providerThreadId: route.providerThreadId,
+          driver: COPILOT_PROVIDER,
+          detail: null,
+          notification: backgroundWorkNotification([report]),
+        });
+        return true;
+      });
+
+      const routeInbox = Effect.fnUntraced(function* (entry: Inbox) {
+        if (
+          !active &&
+          (entry.type === "event" ||
+            entry.type === "plan" ||
+            entry.type === "permission" ||
+            entry.type === "question") &&
+          (yield* bufferWake(entry))
+        )
+          return;
         switch (entry.type) {
           case "event":
             return yield* handleEvent(entry.event);
@@ -1448,6 +1568,11 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
           }
         }
       });
+      const handleInbox = (entry: Inbox) =>
+        Effect.suspend(() => {
+          if (entry.type === "event") trackDetachedShells(entry.event);
+          return routeInbox(entry);
+        });
       yield* Stream.fromQueue(inbox).pipe(
         Stream.runForEach((entry) =>
           handleInbox(entry).pipe(
@@ -1720,8 +1845,13 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
             reason: "previous_turn_active",
           });
         runtimeMode = turnInput.runtimePolicy.runtimeMode;
-        const message = compact ? undefined : yield* prompt(turnInput.message);
-        if (!compact) yield* applyModel(yield* resolveSelection(turnInput.modelSelection));
+        // Provider continuations only drain the wake Copilot already ran; nothing is sent.
+        const continuation =
+          !compact &&
+          turnInput.message.createdBy === "agent" &&
+          turnInput.message.creationSource === "provider";
+        const message = compact || continuation ? undefined : yield* prompt(turnInput.message);
+        if (message) yield* applyModel(yield* resolveSelection(turnInput.modelSelection));
         yield* applyPermissionMode();
         // Attempt ids are unique across restarts of a resumed Copilot session.
         const nativeId = turnInput.attemptId;
@@ -1759,15 +1889,20 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
           entries: new Map(),
           dirty: new Set(),
           subagents: new Map(),
+          subagentsByAgentId: new Map(),
           done: yield* Deferred.make<void>(),
           compact,
-          consumed: false,
+          consumed: continuation,
           flushScheduled: false,
           interruptRequested: false,
         };
         yield* Effect.gen(function* () {
           thread = turnInput.providerThread;
           active = turn;
+          lastRoute = {
+            threadId: turnInput.threadId,
+            providerThreadId: turnInput.providerThread.id,
+          };
           yield* emitProviderTurn(providerTurn);
           yield* updateThread({
             status: "active",
@@ -1775,7 +1910,19 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
             lastRunOrdinal: turnInput.runOrdinal,
           });
           yield* updateSession("running");
+          if (compact) return;
+          const buffered = wake ?? [];
+          wake = undefined;
+          for (const entry of buffered)
+            yield* routeInbox(entry).pipe(
+              Effect.catchCause((cause) =>
+                Effect.logWarning("GitHub Copilot event handling failed", cause),
+              ),
+            );
+          // An empty buffer means a user turn already drained the wake.
+          if (continuation && !buffered.length) yield* finish(turn, "completed");
         }).pipe(eventPermit.withPermits(1));
+        if (continuation) return;
 
         if (compact) {
           yield* Effect.gen(function* () {
@@ -1975,6 +2122,7 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
         providerSession,
         events: Stream.fromQueue(events),
         backgroundTasksEndWithProcess: true,
+        hasPendingBackgroundWork: Effect.sync(() => detachedShells.size > 0 || wake !== undefined),
         ensureThread: (args) =>
           register(args).pipe(
             commands.withPermits(1),

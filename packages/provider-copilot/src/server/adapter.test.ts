@@ -26,6 +26,7 @@ import {
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
 import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
+import * as ProviderContinuationRequests from "@t3tools/provider-core/server/ProviderContinuationRequests";
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
@@ -79,6 +80,7 @@ const sdkEvent = (
 const makeFakeCopilot = (aborts: Queue.Queue<void>) => {
   let config: SessionConfig | undefined;
   const sends: Array<ReturnType<typeof deferredPromise<undefined>>> = [];
+  let sendCount = 0;
   const steers: Array<{ readonly prompt: string; readonly mode?: string }> = [];
   const truncations: string[] = [];
   const forks: Array<{ readonly sessionId: string; readonly toEventId?: string }> = [];
@@ -91,6 +93,7 @@ const makeFakeCopilot = (aborts: Queue.Queue<void>) => {
     },
     sendAndWait: () => {
       const pending = deferredPromise<undefined>();
+      sendCount++;
       sends.push(pending);
       return pending.promise;
     },
@@ -153,6 +156,7 @@ const makeFakeCopilot = (aborts: Queue.Queue<void>) => {
     config: requireConfig,
     emit: (event: SessionEvent) => Effect.sync(() => requireConfig().onEvent?.(event)),
     settle: () => Effect.sync(() => sends.shift()?.resolve(undefined)),
+    sends: () => sendCount,
   };
 };
 
@@ -205,9 +209,12 @@ const makeHarness = Effect.fnUntraced(function* (
         return event as Extract<ProviderAdapter.ProviderAdapterV2Event, { type: T }>;
     }
   });
-  const startTurn = Effect.fnUntraced(function* (admit = true) {
+  const startTurn = Effect.fnUntraced(function* (
+    admit = true,
+    patch: Partial<ProviderAdapter.ProviderAdapterV2TurnInput> = {},
+  ) {
     if (!providerThread) throw new Error("No Copilot thread is attached");
-    const input = yield* turnInput(providerThread, runtimePolicy);
+    const input = { ...(yield* turnInput(providerThread, runtimePolicy)), ...patch };
     yield* runtime.startTurn(input);
     if (admit) yield* fake.emit(sdkEvent("user.message", { content: "Hello Copilot" }));
     return input;
@@ -355,6 +362,138 @@ describe("CopilotAdapterV2", () => {
       );
       assert.isDefined(childTool);
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("settles a background subagent when it finishes, not when its task returns", () =>
+    Effect.gen(function* () {
+      const { fake, all, takeEvent, startTurn } = yield* makeHarness();
+      yield* startTurn();
+      yield* fake.emit(
+        sdkEvent("tool.execution_start", {
+          toolCallId: "task-bg",
+          toolName: "task",
+          arguments: { description: "Ping", prompt: "Reply PONG", mode: "background" },
+        }),
+      );
+      const created = yield* takeEvent("app_thread.created");
+      yield* fake.emit(
+        sdkEvent("subagent.started", { toolCallId: "task-bg" }, { agentId: "agent-uuid" }),
+      );
+      yield* fake.emit(
+        sdkEvent("tool.execution_complete", {
+          toolCallId: "task-bg",
+          success: true,
+          result: { content: "Agent started in background with agent_id: agent-uuid" },
+        }),
+      );
+      yield* fake.emit(
+        sdkEvent(
+          "tool.execution_start",
+          { toolCallId: "child-tool", toolName: "grep", arguments: {} },
+          { agentId: "agent-uuid" },
+        ),
+      );
+      yield* fake.emit(
+        sdkEvent(
+          "assistant.message",
+          { messageId: "child-reply", content: "PONG" },
+          { agentId: "agent-uuid" },
+        ),
+      );
+      yield* fake.emit(
+        sdkEvent("subagent.completed", { toolCallId: "task-bg" }, { agentId: "agent-uuid" }),
+      );
+      yield* fake.emit(sdkEvent("session.idle", {}));
+      yield* fake.settle();
+      yield* takeEvent("turn.terminal");
+
+      const updates = all.flatMap((event) =>
+        event.type === "subagent.updated" ? [event.subagent] : [],
+      );
+      assert.deepStrictEqual(
+        updates.map((subagent) => [subagent.status, subagent.result]),
+        [
+          ["running", null],
+          ["running", null],
+          ["completed", "PONG"],
+        ],
+      );
+      assert.isTrue(
+        all.some(
+          (event) =>
+            event.type === "node.updated" &&
+            event.node.kind === "tool_call" &&
+            event.node.threadId === created.appThread.id,
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("wakes the parent when detached work reports back after the turn settled", () =>
+    Effect.gen(function* () {
+      const continuations = yield* ProviderContinuationRequests.ProviderContinuationRequests;
+      const { fake, runtime, all, takeEvent, startTurn } = yield* makeHarness();
+      yield* startTurn();
+      yield* fake.emit(
+        sdkEvent("tool.execution_start", {
+          toolCallId: "bash-1",
+          toolName: "bash",
+          arguments: { command: "sleep 10", mode: "async", detach: true },
+        }),
+      );
+      yield* fake.emit(
+        sdkEvent("tool.execution_complete", {
+          toolCallId: "bash-1",
+          success: true,
+          result: { content: "<command started in detached background with shellId: 7>" },
+        }),
+      );
+      yield* fake.emit(sdkEvent("session.idle", {}));
+      yield* fake.settle();
+      assert.strictEqual((yield* takeEvent("turn.terminal")).status, "completed");
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+
+      yield* fake.emit(
+        sdkEvent("system.notification", {
+          content: "<system_notification>done</system_notification>",
+          kind: { type: "shell_detached_completed", shellId: "7", description: "Sleep" },
+        }),
+      );
+      yield* fake.emit(sdkEvent("assistant.message", { messageId: "wake", content: "BG done" }));
+      yield* fake.emit(sdkEvent("session.idle", {}));
+      const request = yield* continuations.take;
+      assert.strictEqual(request.threadId, THREAD_ID);
+      assert.strictEqual(request.notification?.summary, 'Command "Sleep" finished');
+      assert.isTrue(yield* runtime.hasPendingBackgroundWork!);
+
+      const before = all.length;
+      const input = yield* startTurn(false, {
+        runId: RunId.make("run-2"),
+        runOrdinal: 2,
+        providerTurnOrdinal: 2,
+        attemptId: RunAttemptId.make("attempt-2"),
+        rootNodeId: NodeId.make("root-2"),
+        message: {
+          messageId: MessageId.make("message-2"),
+          text: "Background work finished",
+          attachments: [],
+          createdBy: "agent",
+          creationSource: "provider",
+        },
+      });
+      assert.strictEqual((yield* takeEvent("turn.terminal")).status, "completed");
+      assert.strictEqual(fake.sends(), 1);
+      const wakeMessage = all
+        .slice(before)
+        .find((event) => event.type === "message.updated" && event.message.text === "BG done");
+      assert.isDefined(wakeMessage);
+      if (wakeMessage?.type === "message.updated")
+        assert.strictEqual(wakeMessage.message.runId, input.runId);
+      assert.isFalse(yield* runtime.hasPendingBackgroundWork!);
+    }).pipe(
+      Effect.scoped,
+      Effect.provide(Layer.merge(testLayer, ProviderContinuationRequests.layer)),
+    ),
   );
 
   it.effect("answers auto-approved permissions without showing them to the client", () =>

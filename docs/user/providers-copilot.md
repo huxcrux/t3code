@@ -30,8 +30,10 @@ Copilot's plan in the thread; send a follow-up to implement it.
 
 Copilot subagents appear as their own threads under the conversation. You can
 steer a running turn, queue follow-ups, rewind the conversation, and fork a
-thread from a completed turn. Copilot token use appears on **Usage**; these
-cost estimates are not your Copilot bill or premium request count.
+thread from a completed turn. When a detached shell command finishes after a
+turn ends, Copilot continues in a new turn on its own. Copilot token use appears
+on **Usage**; these cost estimates are not your Copilot bill or premium request
+count.
 
 Copilot can use T3 Code's tools. Install, sign in, and update Copilot on each
 host where you want it to run; connecting devices do not need it installed.
