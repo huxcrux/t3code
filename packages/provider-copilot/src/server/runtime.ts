@@ -23,7 +23,12 @@ import {
   type ServerProviderUsageLimits,
 } from "@t3tools/contracts";
 import * as HostProcess from "@t3tools/shared/HostProcess";
-import { createModelCapabilities, getModelSelectionStringOptionValue } from "@t3tools/shared/model";
+import {
+  buildProviderOptionSelectionsFromDescriptors,
+  createModelCapabilities,
+  getModelSelectionStringOptionValue,
+  getProviderOptionDescriptors,
+} from "@t3tools/shared/model";
 import { resolveCommandPath } from "@t3tools/shared/shell";
 import { providerModelsFromSettings } from "@t3tools/provider-core/server/snapshotProbe";
 import * as DateTime from "effect/DateTime";
@@ -253,6 +258,28 @@ const REASONING_LABELS: Readonly<Record<string, string>> = {
   xhigh: "Extra High",
   max: "Max",
 };
+const REASONING_ORDER = Object.keys(REASONING_LABELS);
+
+/**
+ * Copilot's catalog rarely reports a default effort, and sessions without one run an unreported
+ * backend default. Fall back to Medium, or the supported level nearest to it.
+ */
+export function defaultCopilotReasoningEffort(
+  supported: ReadonlyArray<string>,
+  reported: string | undefined,
+): string | undefined {
+  if (reported && supported.includes(reported)) return reported;
+  const rank = (effort: string) => {
+    const index = REASONING_ORDER.indexOf(effort);
+    return index === -1
+      ? Number.POSITIVE_INFINITY
+      : Math.abs(index - REASONING_ORDER.indexOf("medium"));
+  };
+  return supported.reduce<string | undefined>(
+    (best, effort) => (best === undefined || rank(effort) < rank(best) ? effort : best),
+    undefined,
+  );
+}
 
 export const EMPTY_COPILOT_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
@@ -274,37 +301,44 @@ export function capabilitiesFromCopilotModel(
   >,
 ): ModelCapabilities {
   const descriptors: Array<ProviderOptionDescriptor> = [];
-  const reasoning = (model.supportedReasoningEfforts ?? []).map((effort) => ({
-    id: effort,
-    label: REASONING_LABELS[effort] ?? effort,
-    ...(model.defaultReasoningEffort === effort ? { isDefault: true } : {}),
-  }));
-  if (reasoning.length > 0) {
-    const current = reasoning.find((option) => option.isDefault)?.id;
+  const efforts = model.supportedReasoningEfforts ?? [];
+  const defaultEffort = defaultCopilotReasoningEffort(efforts, model.defaultReasoningEffort);
+  if (defaultEffort) {
     descriptors.push({
       id: "reasoningEffort",
       label: "Reasoning",
       type: "select",
-      options: reasoning,
-      ...(current ? { currentValue: current } : {}),
+      options: efforts.map((effort) => ({
+        id: effort,
+        label: REASONING_LABELS[effort] ?? effort,
+        ...(effort === defaultEffort ? { isDefault: true } : {}),
+      })),
+      currentValue: defaultEffort,
     });
   }
   const prices = model.billing?.tokenPrices;
-  const longContextMax = positive(prices?.longContext?.contextMax);
-  if (longContextMax !== undefined) {
-    const defaultMax = positive(prices?.contextMax);
-    const longWindow = positive(model.capabilities.limits?.max_context_window_tokens);
+  const defaultWindow =
+    positive(prices?.maxPromptTokens) ??
+    positive(prices?.contextMax) ??
+    positive(model.capabilities.limits?.max_context_window_tokens);
+  const hasLongContext =
+    positive(prices?.longContext?.maxPromptTokens) ?? positive(prices?.longContext?.contextMax);
+  const longWindow = positive(model.capabilities.limits?.max_context_window_tokens);
+  if (defaultWindow !== undefined) {
     descriptors.push({
       id: "contextTier",
       label: "Context Window",
       type: "select",
       options: [
-        {
-          id: "default",
-          label: defaultMax ? formatTokenCount(defaultMax) : "Default",
-          isDefault: true,
-        },
-        { id: "long_context", label: longWindow ? formatTokenCount(longWindow) : "Long Context" },
+        { id: "default", label: formatTokenCount(defaultWindow), isDefault: true },
+        ...(hasLongContext !== undefined
+          ? [
+              {
+                id: "long_context",
+                label: longWindow ? formatTokenCount(longWindow) : "Long Context",
+              },
+            ]
+          : []),
       ],
       currentValue: "default",
     });
@@ -334,20 +368,23 @@ export function modelsFromCopilotSdk(
   return providerModelsFromSettings(builtIn, customModels, EMPTY_COPILOT_MODEL_CAPABILITIES);
 }
 
-/** Context window for the selected model and tier, from the probed catalog. */
-export function copilotContextWindowTokens(
+/**
+ * Clients send only the options a user changed. Fill the rest from the model's defaults so a
+ * session never runs on Copilot's unreported effort, and drop values the model does not offer.
+ */
+export function resolveCopilotModelSelection(
   selection: ModelSelection,
-  models: ReadonlyArray<ModelInfo>,
-): number | undefined {
-  const model = models.find((candidate) => candidate.id === selection.model);
-  if (!model) return undefined;
-  const tier = readCopilotModelOptions(selection).contextTier;
-  if (tier === "long_context")
-    return positive(model.capabilities.limits?.max_context_window_tokens);
-  return (
-    positive(model.billing?.tokenPrices?.contextMax) ??
-    positive(model.capabilities.limits?.max_context_window_tokens)
+  models: ReadonlyArray<ServerProviderModel>,
+): ModelSelection {
+  const caps = models.find((model) => model.slug === selection.model)?.capabilities;
+  if (!caps?.optionDescriptors?.length) return selection;
+  const resolved = buildProviderOptionSelectionsFromDescriptors(
+    getProviderOptionDescriptors({ caps, selections: selection.options }),
   );
+  const resolvedIds = new Set(resolved?.map((option) => option.id));
+  const passthrough = (selection.options ?? []).filter((option) => !resolvedIds.has(option.id));
+  const options = [...(resolved ?? []), ...passthrough];
+  return options.length > 0 ? { ...selection, options } : selection;
 }
 
 const AUTH_TYPE_LABELS: Partial<Record<string, string>> = {

@@ -149,12 +149,18 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv, Pa
           }),
       ),
     );
+    const models = snapshot.getSnapshot.pipe(Effect.map((current) => current.models));
     const orchestrationAdapter = yield* makeCopilotAdapterV2({
       instanceId,
       settings: effectiveConfig,
       environment: processEnvironment,
+      models,
     });
-    const textGeneration = yield* makeCopilotTextGeneration(effectiveConfig, processEnvironment);
+    const textGeneration = yield* makeCopilotTextGeneration(
+      effectiveConfig,
+      processEnvironment,
+      models,
+    );
     return {
       instanceId,
       driverKind: DRIVER_KIND,

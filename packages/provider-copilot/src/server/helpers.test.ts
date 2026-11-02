@@ -1,9 +1,15 @@
 import { assert, describe, it } from "@effect/vitest";
-import type { PermissionRequest } from "@github/copilot-sdk";
+import type { ModelInfo, PermissionRequest } from "@github/copilot-sdk";
 import { ProviderInstanceId } from "@t3tools/contracts";
 
 import { permissionAutoApproved, permissionRequestKind } from "./approvals.ts";
-import { authFromCopilotStatus, copilotSessionModelConfig } from "./runtime.ts";
+import {
+  authFromCopilotStatus,
+  capabilitiesFromCopilotModel,
+  copilotSessionModelConfig,
+  modelsFromCopilotSdk,
+  resolveCopilotModelSelection,
+} from "./runtime.ts";
 import { stripCopilotShellControlLines } from "./toolPresentation.ts";
 
 const shell = { kind: "shell", fullCommandText: "ls" } as unknown as PermissionRequest;
@@ -48,6 +54,73 @@ describe("copilotSessionModelConfig", () => {
     );
     assert.deepStrictEqual(config, { model: "gpt-5" });
     assert.isTrue(needsSwitch);
+  });
+});
+
+describe("Copilot model defaults", () => {
+  const catalogModel = (
+    efforts: ReadonlyArray<string> | undefined,
+    reported?: string,
+    longContext = true,
+  ) =>
+    ({
+      id: "gpt-5",
+      capabilities: { limits: { max_context_window_tokens: 1_000_000 } },
+      ...(efforts ? { supportedReasoningEfforts: [...efforts] } : {}),
+      ...(reported ? { defaultReasoningEffort: reported } : {}),
+      billing: {
+        tokenPrices: {
+          maxPromptTokens: 200_000,
+          ...(longContext ? { longContext: { maxPromptTokens: 936_000 } } : {}),
+        },
+      },
+    }) as unknown as ModelInfo;
+  const defaults = (model: ModelInfo) =>
+    Object.fromEntries(
+      (capabilitiesFromCopilotModel(model).optionDescriptors ?? []).map((descriptor) => [
+        descriptor.id,
+        descriptor.currentValue,
+      ]),
+    );
+
+  it("selects Copilot's default effort, else Medium or the nearest supported level", () => {
+    const cases = [
+      [["low", "medium", "high"], "high", "high"],
+      [["low", "medium", "high"], undefined, "medium"],
+      [["high", "xhigh"], undefined, "high"],
+      [["none", "low"], undefined, "low"],
+    ] as const;
+    for (const [efforts, reported, expected] of cases) {
+      assert.strictEqual(defaults(catalogModel(efforts, reported)).reasoningEffort, expected);
+    }
+    assert.notProperty(defaults(catalogModel(undefined)), "reasoningEffort");
+  });
+
+  it("shows the context window even without a long-context tier", () => {
+    const withTier = capabilitiesFromCopilotModel(catalogModel(["low"]));
+    const withoutTier = capabilitiesFromCopilotModel(catalogModel(["low"], undefined, false));
+    const labels = (caps: typeof withTier) => {
+      const descriptor = caps.optionDescriptors?.find(({ id }) => id === "contextTier");
+      return descriptor?.type === "select" ? descriptor.options.map(({ label }) => label) : [];
+    };
+    assert.deepStrictEqual(labels(withTier), ["200K", "1M"]);
+    assert.deepStrictEqual(labels(withoutTier), ["200K"]);
+  });
+
+  it("fills unselected options from the catalog and keeps explicit picks", () => {
+    const models = modelsFromCopilotSdk([catalogModel(["low", "medium", "high"])], []);
+    assert.deepStrictEqual(resolveCopilotModelSelection(selection(), models).options, [
+      { id: "reasoningEffort", value: "medium" },
+      { id: "contextTier", value: "default" },
+    ]);
+    assert.deepStrictEqual(
+      resolveCopilotModelSelection(selection([{ id: "reasoningEffort", value: "high" }]), models)
+        .options,
+      [
+        { id: "reasoningEffort", value: "high" },
+        { id: "contextTier", value: "default" },
+      ],
+    );
   });
 });
 

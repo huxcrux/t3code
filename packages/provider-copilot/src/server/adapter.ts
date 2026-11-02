@@ -31,6 +31,7 @@ import type {
   RunId,
   RuntimeMode,
   RuntimeRequestId,
+  ServerProviderModel,
   ThreadId,
 } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
@@ -79,6 +80,7 @@ import {
   COPILOT_PROVIDER,
   buildCopilotClientOptions,
   copilotSessionModelConfig,
+  resolveCopilotModelSelection,
   defaultCreateCopilotClient,
   stopCopilotClient,
   switchCopilotModel,
@@ -189,6 +191,8 @@ export interface CopilotAdapterV2Options {
   readonly instanceId: ProviderInstanceId;
   readonly settings: CopilotSettings;
   readonly environment: NodeJS.ProcessEnv;
+  /** Latest probed catalog, used to fill option defaults the client left implicit. */
+  readonly models?: Effect.Effect<ReadonlyArray<ServerProviderModel>>;
   readonly createClient?: CreateCopilotClient;
 }
 
@@ -340,6 +344,10 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
   const path = yield* Path.Path;
   const mcpSessions = yield* McpProviderSessions.McpProviderSessions;
   const createClient = options.createClient ?? defaultCreateCopilotClient;
+  const resolveSelection = (selection: ModelSelection) =>
+    (options.models ?? Effect.succeed([])).pipe(
+      Effect.map((models) => resolveCopilotModelSelection(selection, models)),
+    );
 
   const protocolError = (detail: string, payload?: unknown) =>
     new ProviderAdapter.ProviderAdapterProtocolError({
@@ -1554,7 +1562,11 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
         if (thread)
           return yield* protocolError("Open a new session to attach another Copilot session");
         runtimeMode = args.runtimePolicy.runtimeMode;
-        const config = sessionConfig(args, yield* mcpSessions.read(args.threadId));
+        const modelSelection = yield* resolveSelection(args.modelSelection);
+        const config = sessionConfig(
+          { ...args, modelSelection },
+          yield* mcpSessions.read(args.threadId),
+        );
         const created = requestedId
           ? yield* tryCopilot("Failed to resume the GitHub Copilot session.", () =>
               client.resumeSession(requestedId, config),
@@ -1578,7 +1590,7 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
             );
         session = created;
         appliedModel = undefined;
-        yield* applyModel(args.modelSelection);
+        yield* applyModel(modelSelection);
         const createdAt = yield* DateTime.now;
         thread = existing
           ? {
@@ -1682,7 +1694,7 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
           });
         runtimeMode = turnInput.runtimePolicy.runtimeMode;
         const message = compact ? undefined : yield* prompt(turnInput.message);
-        if (!compact) yield* applyModel(turnInput.modelSelection);
+        if (!compact) yield* applyModel(yield* resolveSelection(turnInput.modelSelection));
         // Attempt ids are unique across restarts of a resumed Copilot session.
         const nativeId = turnInput.attemptId;
         const startedAt = yield* DateTime.now;

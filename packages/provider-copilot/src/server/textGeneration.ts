@@ -2,7 +2,7 @@ import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
-import { TextGenerationError } from "@t3tools/contracts";
+import { TextGenerationError, type ServerProviderModel } from "@t3tools/contracts";
 import * as TextGenerationOperations from "@t3tools/provider-core/server/textGenerationOperations";
 
 import type { CopilotSettings } from "../settings.ts";
@@ -10,6 +10,7 @@ import {
   buildCopilotClientOptions,
   copilotSessionModelConfig,
   defaultCreateCopilotClient,
+  resolveCopilotModelSelection,
   stopCopilotClient,
   switchCopilotModel,
   tryCopilot,
@@ -23,13 +24,14 @@ const isTextGenerationError = Schema.is(TextGenerationError);
 export const makeCopilotTextGeneration = (
   settings: CopilotSettings,
   environment: NodeJS.ProcessEnv,
+  models: Effect.Effect<ReadonlyArray<ServerProviderModel>> = Effect.succeed([]),
   createClient: CreateCopilotClient = defaultCreateCopilotClient,
 ) => {
   const runCopilotJson: TextGenerationOperations.Runner = Effect.fn(
     "CopilotTextGeneration.runCopilotJson",
   )(
     function* (request) {
-      const { operation, cwd, prompt, modelSelection } = request;
+      const { operation, cwd, prompt } = request;
       if (!settings.enabled) {
         return yield* new TextGenerationError({
           operation,
@@ -42,6 +44,7 @@ export const makeCopilotTextGeneration = (
         stopCopilotClient,
       );
       yield* tryCopilot("Failed to start GitHub Copilot.", () => client.start());
+      const modelSelection = resolveCopilotModelSelection(request.modelSelection, yield* models);
       const model = copilotSessionModelConfig(modelSelection);
       // No tools and no discovered config: background helpers must never touch the workspace.
       const session = yield* Effect.acquireRelease(
