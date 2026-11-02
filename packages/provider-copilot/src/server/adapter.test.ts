@@ -29,6 +29,7 @@ import * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter"
 import * as TestProviderHost from "@t3tools/provider-testing/TestProviderHost";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Queue from "effect/Queue";
@@ -75,12 +76,13 @@ const sdkEvent = (
     ...extra,
   }) as unknown as SessionEvent;
 
-const makeFakeCopilot = () => {
+const makeFakeCopilot = (aborts: Queue.Queue<void>) => {
   let config: SessionConfig | undefined;
   const sends: Array<ReturnType<typeof deferredPromise<undefined>>> = [];
   const steers: Array<{ readonly prompt: string; readonly mode?: string }> = [];
   const truncations: string[] = [];
   const forks: Array<{ readonly sessionId: string; readonly toEventId?: string }> = [];
+  const permissionModes: string[] = [];
   const session = {
     sessionId: "native-session",
     send: async (options: { readonly prompt: string; readonly mode?: string }) => {
@@ -92,11 +94,19 @@ const makeFakeCopilot = () => {
       sends.push(pending);
       return pending.promise;
     },
-    abort: async () => {},
+    abort: async () => {
+      Queue.offerUnsafe(aborts, undefined);
+    },
     disconnect: async () => {},
     getEvents: async () => [],
     rpc: {
       model: { switchTo: async () => ({}) },
+      permissions: {
+        setMode: async ({ mode }: { readonly mode: string }) => {
+          permissionModes.push(mode);
+          return { success: true, mode };
+        },
+      },
       plan: { readSqlTodos: async () => ({ todos: [] }) },
       history: {
         compact: async () => ({}),
@@ -138,6 +148,8 @@ const makeFakeCopilot = () => {
     steers,
     truncations,
     forks,
+    permissionModes,
+    aborts,
     config: requireConfig,
     emit: (event: SessionEvent) => Effect.sync(() => requireConfig().onEvent?.(event)),
     settle: () => Effect.sync(() => sends.shift()?.resolve(undefined)),
@@ -148,7 +160,7 @@ const makeHarness = Effect.fnUntraced(function* (
   runtimeMode: RuntimeMode = "full-access",
   attachThread = true,
 ) {
-  const fake = makeFakeCopilot();
+  const fake = makeFakeCopilot(yield* Queue.unbounded<void>());
   // The adapter resolves the configured CLI before handing it to the (faked) SDK client.
   const fileSystem = yield* FileSystem.FileSystem;
   const binaryPath = `${yield* fileSystem.makeTempDirectoryScoped()}/copilot`;
@@ -193,11 +205,11 @@ const makeHarness = Effect.fnUntraced(function* (
         return event as Extract<ProviderAdapter.ProviderAdapterV2Event, { type: T }>;
     }
   });
-  const startTurn = Effect.fnUntraced(function* () {
+  const startTurn = Effect.fnUntraced(function* (admit = true) {
     if (!providerThread) throw new Error("No Copilot thread is attached");
     const input = yield* turnInput(providerThread, runtimePolicy);
     yield* runtime.startTurn(input);
-    yield* fake.emit(sdkEvent("user.message", { content: "Hello Copilot" }));
+    if (admit) yield* fake.emit(sdkEvent("user.message", { content: "Hello Copilot" }));
     return input;
   });
   const providerTurns = () =>
@@ -367,6 +379,17 @@ describe("CopilotAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("asks Copilot for assisted approval recommendations only in auto mode", () =>
+    Effect.gen(function* () {
+      const auto = yield* makeHarness("auto");
+      yield* auto.startTurn();
+      assert.deepStrictEqual(auto.fake.permissionModes, ["assisted"]);
+      const manual = yield* makeHarness("approval-required");
+      yield* manual.startTurn();
+      assert.deepStrictEqual(manual.fake.permissionModes, ["manual"]);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("asks the client for permissions in approval-required mode", () =>
     Effect.gen(function* () {
       const { fake, takeEvent, startTurn } = yield* makeHarness("approval-required");
@@ -407,6 +430,24 @@ describe("CopilotAdapterV2", () => {
       const final = providerTurns().at(-1)!;
       assert.strictEqual(final.nativeTurnRef?.strength, "strong");
       assert.strictEqual(final.nativeTurnRef?.nativeId, openingMessageId);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("aborts again when Copilot admits a turn after its interrupt", () =>
+    Effect.gen(function* () {
+      const { fake, runtime, takeEvent, startTurn, providerThread } = yield* makeHarness();
+      yield* startTurn(false);
+      const { providerTurn } = yield* takeEvent("provider_turn.updated");
+      const interrupt = yield* runtime
+        .interruptTurn({ providerThread: providerThread!, providerTurnId: providerTurn.id })
+        .pipe(Effect.forkScoped);
+      yield* Queue.take(fake.aborts);
+      yield* fake.emit(sdkEvent("user.message", { content: "Hello Copilot" }));
+      yield* Queue.take(fake.aborts);
+      yield* fake.emit(sdkEvent("session.idle", { aborted: true }));
+      yield* Fiber.join(interrupt);
+      const terminal = yield* takeEvent("turn.terminal");
+      assert.strictEqual(terminal.status, "interrupted");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

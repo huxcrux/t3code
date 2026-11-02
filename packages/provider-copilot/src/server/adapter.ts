@@ -424,6 +424,7 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
       let broken = false;
       let runtimeMode: RuntimeMode = input.runtimePolicy.runtimeMode;
       let appliedModel: string | undefined;
+      let appliedPermissionMode: "assisted" | "manual" | undefined;
       const pending = new Map<RuntimeRequestId, PendingRequest>();
       let nextLocalId = 0;
 
@@ -1236,6 +1237,15 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
             if (owner || turn.consumed) return;
             turn.consumed = true;
             turn.providerTurn = { ...turn.providerTurn, nativeTurnRef: nativeRef(event.id) };
+            // The SDK sends abort immediately but prepares the send asynchronously, so an early
+            // interrupt can reach Copilot before the turn it should stop.
+            if (turn.interruptRequested && session) {
+              const current = session;
+              yield* Effect.tryPromise(() => current.abort()).pipe(
+                Effect.catch((cause) => Effect.logWarning("Copilot abort failed", cause)),
+                Effect.forkIn(scope),
+              );
+            }
             return yield* emitProviderTurn(turn.providerTurn);
           case "assistant.message_delta":
             if (!owner)
@@ -1590,7 +1600,9 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
             );
         session = created;
         appliedModel = undefined;
+        appliedPermissionMode = undefined;
         yield* applyModel(modelSelection);
+        yield* applyPermissionMode();
         const createdAt = yield* DateTime.now;
         thread = existing
           ? {
@@ -1640,6 +1652,21 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
           yield* switchCopilotModel(current, selection);
         appliedModel = key;
         providerSession = { ...providerSession, model: selection.model };
+      });
+
+      // Assisted mode attaches the judge recommendations `auto` approves on. Setting the mode
+      // explicitly also keeps a user's CLI `defaultPermissionMode` from bypassing T3's handler.
+      const applyPermissionMode = Effect.fnUntraced(function* () {
+        const current = session;
+        if (!current) return;
+        const mode = runtimeMode === "auto" ? "assisted" : "manual";
+        if (appliedPermissionMode === mode) return;
+        appliedPermissionMode = mode;
+        yield* Effect.tryPromise(() => current.rpc.permissions.setMode({ mode })).pipe(
+          Effect.catch((cause) =>
+            Effect.logWarning("Copilot rejected the permission mode; approvals will prompt", cause),
+          ),
+        );
       });
 
       const prompt = Effect.fnUntraced(function* (
@@ -1695,6 +1722,7 @@ export const makeCopilotAdapterV2 = Effect.fn("makeCopilotAdapterV2")(function* 
         runtimeMode = turnInput.runtimePolicy.runtimeMode;
         const message = compact ? undefined : yield* prompt(turnInput.message);
         if (!compact) yield* applyModel(yield* resolveSelection(turnInput.modelSelection));
+        yield* applyPermissionMode();
         // Attempt ids are unique across restarts of a resumed Copilot session.
         const nativeId = turnInput.attemptId;
         const startedAt = yield* DateTime.now;
