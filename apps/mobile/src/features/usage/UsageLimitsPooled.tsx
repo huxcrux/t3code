@@ -33,6 +33,7 @@ const DRIVER_LABEL: Partial<Record<string, string>> = {
   codex: "Codex",
   claudeAgent: "Claude",
   grok: "Grok",
+  copilot: "GitHub Copilot",
   antigravity: "Antigravity",
 };
 const PACE_LABEL = { ahead: "Ahead of pace", on: "On pace", under: "Under pace" } as const;

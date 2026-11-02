@@ -64,6 +64,8 @@ const SETTINGS_SEARCH_TERMS = {
     "claude",
     "cursor",
     "opencode",
+    "copilot",
+    "github",
     "sign in",
     "login",
     "auth",

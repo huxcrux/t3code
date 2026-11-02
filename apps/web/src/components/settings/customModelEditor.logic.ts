@@ -79,6 +79,28 @@ export const DESCRIPTOR_PRESETS_BY_KIND: Partial<
     { id: "fastMode", label: "Fast Mode", type: "boolean" },
     { id: "thinking", label: "Thinking", type: "boolean" },
   ],
+  [ProviderDriverKind.make("copilot")]: [
+    {
+      id: "reasoningEffort",
+      label: "Reasoning",
+      type: "select",
+      choices: [
+        { id: "none", label: "None" },
+        { id: "minimal", label: "Minimal" },
+        ...EFFORT_CHOICES,
+        { id: "max", label: "Max" },
+      ],
+    },
+    {
+      id: "contextTier",
+      label: "Context Window",
+      type: "select",
+      choices: [
+        { id: "default", label: "Default", isDefault: true },
+        { id: "long_context", label: "Long Context" },
+      ],
+    },
+  ],
   [ProviderDriverKind.make("grok")]: [
     { id: "reasoningEffort", label: "Reasoning", type: "select", choices: EFFORT_CHOICES },
   ],
