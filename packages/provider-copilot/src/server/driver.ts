@@ -34,6 +34,7 @@ import {
 
 import { CopilotSettings } from "../settings.ts";
 import { makeCopilotAdapterV2 } from "./adapter.ts";
+import { isolateCopilotCredentials } from "./runtime.ts";
 import {
   buildInitialCopilotProviderSnapshot,
   checkCopilotProviderStatus,
@@ -80,7 +81,10 @@ export const CopilotDriver: ProviderDriver<CopilotSettings, CopilotDriverEnv, Pa
     const httpClient = yield* HttpClient.HttpClient;
     const latestVersions = yield* ProviderLatestVersions.ProviderLatestVersions;
     const host = yield* ProviderHost.ProviderHost;
-    const processEnvironment = yield* mergeProviderInstanceEnvironment(environment);
+    const processEnvironment = isolateCopilotCredentials(
+      environment,
+      yield* mergeProviderInstanceEnvironment(environment),
+    );
     const effectiveConfig = {
       ...config,
       enabled,

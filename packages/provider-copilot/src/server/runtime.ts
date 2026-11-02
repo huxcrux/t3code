@@ -44,13 +44,10 @@ export type CreateCopilotClient = (options: CopilotClientOptions) => CopilotClie
 export const defaultCreateCopilotClient: CreateCopilotClient = (options) =>
   new CopilotClient(options);
 
-export class CopilotRuntimeError extends Schema.TaggedError<CopilotRuntimeError>()(
-  "CopilotRuntimeError",
-  {
-    detail: Schema.String,
-    cause: Schema.optional(Schema.Defect()),
-  },
-) {
+class CopilotRuntimeError extends Schema.TaggedError<CopilotRuntimeError>()("CopilotRuntimeError", {
+  detail: Schema.String,
+  cause: Schema.optional(Schema.Defect()),
+}) {
   override get message(): string {
     return this.detail;
   }
@@ -85,7 +82,7 @@ function isExecutableFile(path: string): boolean {
 }
 
 /** Copilot's shell tool rejects a missing or relative SHELL; fall back to a POSIX shell. */
-export function normalizeCopilotEnvironment(
+function normalizeCopilotEnvironment(
   input: NodeJS.ProcessEnv,
   platform: NodeJS.Platform,
 ): NodeJS.ProcessEnv {
@@ -107,8 +104,28 @@ export function normalizeCopilotEnvironment(
   return env;
 }
 
+const COPILOT_TOKEN_ENV = new Set(["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"]);
+const COPILOT_ACCOUNT_ENV = new Set([...COPILOT_TOKEN_ENV, "COPILOT_HOME"]);
+
+/** The CLI prefers any token in its environment, so an instance with its own account drops the host's. */
+export function isolateCopilotCredentials(
+  configured: ReadonlyArray<{ readonly name: string; readonly value: string }> | undefined,
+  env: NodeJS.ProcessEnv,
+): NodeJS.ProcessEnv {
+  const names = new Set(
+    configured?.flatMap((variable) => (variable.value.trim() ? [variable.name.toUpperCase()] : [])),
+  );
+  if (![...COPILOT_ACCOUNT_ENV].some((name) => names.has(name))) return env;
+  const next = { ...env };
+  for (const name of Object.keys(next)) {
+    const upper = name.toUpperCase();
+    if (COPILOT_TOKEN_ENV.has(upper) && !names.has(upper)) delete next[name];
+  }
+  return next;
+}
+
 /** The SDK cannot spawn Windows npm shell shims; point it at npm's JS entry instead. */
-export function resolveCopilotSdkExecutable(
+function resolveCopilotSdkExecutable(
   binaryPath: string,
   platform: NodeJS.Platform,
   isFile: (path: string) => boolean = isExecutableFile,
@@ -163,6 +180,8 @@ export const buildCopilotClientOptions = Effect.fn("buildCopilotClientOptions")(
     connection,
     ...(input.cwd ? { workingDirectory: input.cwd } : {}),
     env,
+    // A rejected token must surface as signed out, not fall back to the host's saved login.
+    useLoggedInUser: trimOrUndefined(env.COPILOT_GITHUB_TOKEN) === undefined,
     logLevel: "error",
   } satisfies CopilotClientOptions;
 });
@@ -186,7 +205,7 @@ const CopilotModelOptions = Schema.Struct({
 });
 const decodeModelOptions = Schema.decodeUnknownSync(CopilotModelOptions);
 
-export function readCopilotModelOptions(selection: ModelSelection | undefined) {
+function readCopilotModelOptions(selection: ModelSelection | undefined) {
   try {
     return decodeModelOptions({
       reasoningEffort: getModelSelectionStringOptionValue(selection, "reasoningEffort"),
@@ -264,7 +283,7 @@ const REASONING_ORDER = Object.keys(REASONING_LABELS);
  * Copilot's catalog rarely reports a default effort, and sessions without one run an unreported
  * backend default. Fall back to Medium, or the supported level nearest to it.
  */
-export function defaultCopilotReasoningEffort(
+function defaultCopilotReasoningEffort(
   supported: ReadonlyArray<string>,
   reported: string | undefined,
 ): string | undefined {
@@ -281,7 +300,7 @@ export function defaultCopilotReasoningEffort(
   );
 }
 
-export const EMPTY_COPILOT_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
+const EMPTY_COPILOT_MODEL_CAPABILITIES: ModelCapabilities = createModelCapabilities({
   optionDescriptors: [],
 });
 
@@ -400,7 +419,7 @@ export interface CopilotPlanInfo {
 }
 
 // `copilot_plan` alone cannot tell Pro from Pro+ or Free; the access SKU can.
-export function copilotPlanLabel(user: CopilotPlanInfo | undefined): string | undefined {
+function copilotPlanLabel(user: CopilotPlanInfo | undefined): string | undefined {
   const plan = trimOrUndefined(user?.copilot_plan)?.toLowerCase();
   const sku = trimOrUndefined(user?.access_type_sku)?.toLowerCase() ?? "";
   const tier =

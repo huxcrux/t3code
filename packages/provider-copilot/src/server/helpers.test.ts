@@ -1,17 +1,26 @@
 import { assert, describe, it } from "@effect/vitest";
+import * as NodeServices from "@effect/platform-node/NodeServices";
 import type { ModelInfo, PermissionRequest } from "@github/copilot-sdk";
 import { ProviderInstanceId } from "@t3tools/contracts";
+import * as Effect from "effect/Effect";
+import * as FileSystem from "effect/FileSystem";
+import * as Schema from "effect/Schema";
+
+import { CopilotSettings } from "../settings.ts";
 
 import { permissionAutoApproved, permissionRequestKind } from "./approvals.ts";
 import {
   authFromCopilotStatus,
+  buildCopilotClientOptions,
   capabilitiesFromCopilotModel,
   copilotSessionModelConfig,
+  isolateCopilotCredentials,
   modelsFromCopilotSdk,
   resolveCopilotModelSelection,
 } from "./runtime.ts";
 import { stripCopilotShellControlLines } from "./toolPresentation.ts";
 
+const decodeSettings = Schema.decodeEffect(CopilotSettings);
 const shell = { kind: "shell", fullCommandText: "ls" } as unknown as PermissionRequest;
 const write = { kind: "write", fileName: "a.ts" } as unknown as PermissionRequest;
 const selection = (options: ReadonlyArray<{ id: string; value: string }> = []) => ({
@@ -178,4 +187,44 @@ describe("authFromCopilotStatus", () => {
     ).auth;
     assert.strictEqual(auth.label, "GitHub CLI · ghe.example.com");
   });
+});
+
+describe("Copilot credentials", () => {
+  const host = { PATH: "/usr/bin:/bin", GH_TOKEN: "host-gh", GITHUB_TOKEN: "host-github" };
+
+  it("keeps the host login only for instances without their own credentials", () => {
+    assert.deepStrictEqual(isolateCopilotCredentials([], host), host);
+    assert.deepStrictEqual(
+      isolateCopilotCredentials([{ name: "COPILOT_GITHUB_TOKEN", value: " " }], host),
+      host,
+    );
+    assert.deepStrictEqual(
+      isolateCopilotCredentials([{ name: "COPILOT_GITHUB_TOKEN", value: "instance" }], {
+        ...host,
+        COPILOT_GITHUB_TOKEN: "instance",
+      }),
+      { PATH: "/usr/bin:/bin", COPILOT_GITHUB_TOKEN: "instance" },
+    );
+    assert.deepStrictEqual(
+      isolateCopilotCredentials([{ name: "COPILOT_HOME", value: "/a" }], {
+        ...host,
+        COPILOT_HOME: "/a",
+      }),
+      { PATH: "/usr/bin:/bin", COPILOT_HOME: "/a" },
+    );
+  });
+
+  it.effect("disables the saved-login fallback when a Copilot token is set", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const binaryPath = `${yield* fileSystem.makeTempDirectoryScoped()}/copilot`;
+      yield* fileSystem.writeFileString(binaryPath, "#!/bin/sh\n");
+      yield* fileSystem.chmod(binaryPath, 0o755);
+      const settings = yield* decodeSettings({ binaryPath });
+      const options = (environment: NodeJS.ProcessEnv) =>
+        buildCopilotClientOptions({ settings, environment });
+      assert.isTrue((yield* options(host)).useLoggedInUser);
+      assert.isFalse((yield* options({ ...host, COPILOT_GITHUB_TOKEN: "t" })).useLoggedInUser);
+    }).pipe(Effect.scoped, Effect.provide(NodeServices.layer)),
+  );
 });
